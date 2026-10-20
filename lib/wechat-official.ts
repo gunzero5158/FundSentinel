@@ -1,6 +1,7 @@
 import 'server-only';
 import {createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 import {cloud,HttpError,load,save} from './store';
+import {armChannel} from './notifications';
 function key(){const secret=process.env.CHANNEL_ENCRYPTION_KEY;if(!secret||!/^[a-f0-9]{64}$/i.test(secret))throw new HttpError(503,'请配置通知加密密钥');return Buffer.from(secret,'hex');}
 function sign(value:string){return createHmac('sha256',key()).update('wechat-official:'+value).digest('base64url');}
 export async function startOfficial(user:string){
@@ -16,7 +17,7 @@ export async function completeOfficial(code:string,state:string){
   const w=await load(user);if(w.officialNonce!==nonce)throw new HttpError(400,'此绑定链接已使用或被替换');
   const u=new URL('https://api.weixin.qq.com/sns/oauth2/access_token');u.search=new URLSearchParams({appid:process.env.WECHAT_OFFICIAL_APP_ID??'',secret:process.env.WECHAT_OFFICIAL_APP_SECRET??'',code,grant_type:'authorization_code'}).toString();
   const r=await fetch(u,{cache:'no-store',signal:AbortSignal.timeout(15000)}),data=await r.json();if(data.errcode||!data.openid)throw new HttpError(400,'微信授权失败，请在微信内重新打开绑定链接');
-  w.channels=[...w.channels.filter(c=>c.kind!=='wechatOfficial'),{id:'wechatOfficial',kind:'wechatOfficial',endpoint:data.openid,enabled:true}];delete w.officialNonce;await save(user,w,w.revision);
+  const channel={id:'wechatOfficial',kind:'wechatOfficial' as const,endpoint:data.openid,enabled:true};armChannel(w,channel);w.channels=[...w.channels.filter(c=>c.kind!=='wechatOfficial'),channel];delete w.officialNonce;await save(user,w,w.revision);
 }
 let cached:{token:string;expires:number}|undefined;
 export async function sendOfficial(openid:string,content:string){

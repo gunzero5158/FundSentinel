@@ -19,14 +19,17 @@ export function parseEastmoney(code:string,source:string):Fund {
   const raw=extractAssignment(source,'Data_netWorthTrend');
   const acc=extractAssignment(source,'Data_ACWorthTrend');
   if(!Array.isArray(raw)||!raw.length||!Array.isArray(acc))throw new Error('净值数据为空或格式异常');
-  const cumulative=new Map(acc.map((p:unknown[])=>[dateOf(Number(p[0])),positive(p[1])]));
+  // The source occasionally publishes null cumulative NAV for a few dates; one gap must not reject the whole fund.
+  const cumulative=new Map(acc.filter((p:unknown[])=>Number(p[1])>0).map((p:unknown[])=>[dateOf(Number(p[0])),positive(p[1])]));
   const unique=new Map<string,Point>();
   for(const r of raw){
     const date=dateOf(Number(r.x)),nav=positive(r.y),daily=r.equityReturn===undefined||r.equityReturn===null?null:Number(r.equityReturn);
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!cumulative.has(date))throw new Error('净值日期或累计净值缺失');
-    unique.set(date,{date,nav,acc:cumulative.get(date)!,adj:null,daily:daily!==null&&Number.isFinite(daily)?daily:null,dividend:String(r.unitMoney??'').trim()});
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('净值日期缺失');
+    unique.set(date,{date,nav,acc:cumulative.get(date)??NaN,adj:null,daily:daily!==null&&Number.isFinite(daily)?daily:null,dividend:String(r.unitMoney??'').trim()});
   }
   const history=[...unique.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  // Cumulative NAV = unit NAV + paid distributions, so without a distribution it moves one-for-one with unit NAV.
+  history.forEach((p,i)=>{if(!Number.isFinite(p.acc))p.acc=i&&!p.dividend?history[i-1].acc+p.nav-history[i-1].nav:p.nav;});
   let reliable=true,adj=history[0].nav;
   for(let i=0;i<history.length;i++){
     const p=history[i];

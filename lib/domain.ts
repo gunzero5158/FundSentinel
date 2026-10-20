@@ -13,10 +13,10 @@ export const RULE_NAMES: Record<RuleType,string> = {
 };
 export type Rule = {id: string; code: string | null; type: RuleType; threshold: number; activation: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
 export type RuleState = {status: 'ARMED'|'TRIGGERED'; value?: number; date?: string; evaluated?: string};
-export type Alert = {id: string; code: string; ruleId: string; date: string; title: string; value: number; threshold: number; label: string; escalation: boolean; read: boolean};
-export type Channel = {id: string; kind: 'bark'|'wecom'|'feishu'|'dingtalk'|'pushplus'|'serverchan'|'wechat'|'wechatOfficial'; endpoint: string; enabled: boolean; remaining?:number};
-export type Delivery = {id: string; channelId: string; alertIds: string[]; status: 'pending'|'sent'; attempts: number; error?: string};
-export type Workspace = {revision: number; positions: Position[]; rules: Rule[]; states: Record<string,RuleState>; alerts: Alert[]; funds: Record<string,Fund>; portfolioHwm: number; portfolioSignature: string; channels: Channel[]; deliveries: Delivery[]; lastSync?: string; syncErrors: string[]; demo: boolean;ocrUsage?:{date:string;count:number};officialNonce?:string;deliveryLease?:{owner:string;expires:number}};
+export type Alert = {id: string; code: string; ruleId: string; date: string; title: string; value: number; threshold: number; label: string; escalation: boolean; read: boolean; seq?: number};
+export type Channel = {id: string; kind: 'bark'|'wecom'|'feishu'|'dingtalk'|'pushplus'|'serverchan'|'wechat'|'wechatOfficial'; endpoint: string; enabled: boolean; remaining?:number; cursor?:number};
+export type Delivery = {id: string; channelId: string; alertIds: string[]; status: 'pending'|'sent'|'failed'; attempts: number; error?: string};
+export type Workspace = {revision: number; positions: Position[]; rules: Rule[]; states: Record<string,RuleState>; alerts: Alert[]; funds: Record<string,Fund>; portfolioHwm: number; portfolioSignature: string; channels: Channel[]; deliveries: Delivery[]; lastSync?: string; syncErrors: string[]; demo: boolean;ocrUsage?:{date:string;count:number};alertSeq?:number;officialNonce?:string;deliveryLease?:{owner:string;expires:number}};
 export function emptyWorkspace(): Workspace {
   return {revision:0,positions:[],rules:defaultRules(),states:{},alerts:[],funds:{},portfolioHwm:0,portfolioSignature:'',channels:[],deliveries:[],syncErrors:[],demo:false};
 }
@@ -25,6 +25,8 @@ export function defaultRules(): Rule[] {
     ['TRAILING_STOP_NAV',5,5],['FIXED_STOP_LOSS',5,0],['FUND_HIST_MDD',90,0],['PORTFOLIO_DD',3,0],
   ].map(([type,threshold,activation],i)=>({id:`default-${i}`,code:null,type:type as RuleType,threshold:Number(threshold),activation:Number(activation),step:2,buffer:1,window:252,basis:'pct',label:'',paused:false}));
 }
+// Monotonic sequence lets each channel keep a cursor instead of remembering every alert id it has covered.
+export function addAlert(w: Workspace,alert: Omit<Alert,'seq'>){w.alertSeq=(w.alertSeq??0)+1;w.alerts.push({...alert,seq:w.alertSeq});}
 export function latest(f: Fund): Point { if(!f.history.length) throw new Error('基金缺少有效净值'); return f.history[f.history.length-1]; }
 export function positionMetrics(p: Position,f: Fund) {
   const t=latest(f), prev=f.history.at(-2), hwm=Math.max(p.hwm,t.nav), ret=p.cost>0?(t.nav/p.cost-1)*100:0;
@@ -88,13 +90,13 @@ export function evaluate(w: Workspace): Workspace {
     const actions=f.history.filter(x=>x.dividend && x.date>(p.lastEvaluated??t.date.slice(0,0)) && x.date>=p.addedAt);
     if(p.holding && actions.length){
       p.needsCalibration=true;
-      for(const a of actions){const id=`corporate:${p.id}:${a.date}`;if(!w.alerts.some(x=>x.id===id))w.alerts.push({id,code:p.code,ruleId:'corporate',date:a.date,title:'分红除权校准提醒：请确认份额与成本',value:0,threshold:0,label:a.dividend,escalation:false,read:false});}
+      for(const a of actions){const id=`corporate:${p.id}:${a.date}`;if(!w.alerts.some(x=>x.id===id))addAlert(w,{id,code:p.code,ruleId:'corporate',date:a.date,title:'分红除权校准提醒：请确认份额与成本',value:0,threshold:0,label:a.dividend,escalation:false,read:false});}
     }
     if(!p.needsCalibration && t.nav>p.hwm){p.hwm=t.nav;p.hwmDate=t.date;}
     for(const r of effectiveRules(w,p.code)){
       const value=ruleValue(r,p,f);if(value===null)continue;
       const key=`${r.id}:${p.id}`,next=transition(w.states[key],r,value,t.date);w.states[key]=next.state;
-      if(next.notify)w.alerts.push({id:`${key}:${t.date}`,code:p.code,ruleId:r.id,date:t.date,title:RULE_NAMES[r.type],value,threshold:r.threshold,label:r.label,escalation:next.escalation,read:false});
+      if(next.notify)addAlert(w,{id:`${key}:${t.date}`,code:p.code,ruleId:r.id,date:t.date,title:RULE_NAMES[r.type],value,threshold:r.threshold,label:r.label,escalation:next.escalation,read:false});
     }
     p.lastEvaluated=t.date;
   }
@@ -103,14 +105,16 @@ export function evaluate(w: Workspace): Workspace {
   const market=held.reduce((sum,p)=>sum+positionMetrics(p,w.funds[p.code]).market,0);
   // A contribution/withdrawal changes the base; never interpret it as market drawdown.
   if(signature!==w.portfolioSignature){w.portfolioHwm=market;w.portfolioSignature=signature;for(const r of w.rules.filter(r=>r.type==='PORTFOLIO_DD'))delete w.states[`${r.id}:portfolio`];}
-  const dates=held.map(p=>latest(w.funds[p.code]).date);
-  // Only evaluate a portfolio on a common NAV date; mixed QDII dates are explicitly pending.
-  if(held.length && new Set(dates).size===1 && !held.some(p=>p.needsCalibration)){
+  // QDII/FOF confirm a day or more later than domestic funds, so a common NAV date may never occur.
+  // Use each fund's latest NAV and key the evaluation by the earliest of them: the portfolio is
+  // re-evaluated once every holding has advanced, and never twice for the same set of NAVs.
+  const date=held.map(p=>latest(w.funds[p.code]).date).sort()[0];
+  if(held.length && !held.some(p=>p.needsCalibration)){
     w.portfolioHwm=Math.max(w.portfolioHwm,market);
     for(const r of w.rules.filter(r=>r.type==='PORTFOLIO_DD')){
       const value=w.portfolioHwm>0?(w.portfolioHwm-market)/w.portfolioHwm*100:0;
-      const key=`${r.id}:portfolio`,next=transition(w.states[key],r,value,dates[0]);w.states[key]=next.state;
-      if(next.notify)w.alerts.push({id:`${key}:${dates[0]}`,code:'portfolio',ruleId:r.id,date:dates[0],title:RULE_NAMES.PORTFOLIO_DD,value,threshold:r.threshold,label:r.label,escalation:next.escalation,read:false});
+      const key=`${r.id}:portfolio`,next=transition(w.states[key],r,value,date);w.states[key]=next.state;
+      if(next.notify)addAlert(w,{id:`${key}:${date}`,code:'portfolio',ruleId:r.id,date,title:RULE_NAMES.PORTFOLIO_DD,value,threshold:r.threshold,label:r.label,escalation:next.escalation,read:false});
     }
   }
   return w;

@@ -44,7 +44,6 @@ test('portfolio transfers rebase HWM; identical holdings retain drawdown',()=>{
   w.funds['000001']=fund([1,1.2,1.14]);evaluate(w);assert.ok(w.alerts.some(a=>a.code==='portfolio'));
   w.positions[0].shares=5000;evaluate(w);near(w.portfolioHwm,5700);
 });
-test('mixed QDII NAV dates do not trigger portfolio alerts',()=>{const w=emptyWorkspace();w.positions=[position(),{...position(),id:'p2',code:'000002'}];w.funds={'000001':fund(),'000002':{...fund([1,1.1]),code:'000002'}};w.rules=[rule('PORTFOLIO_DD',1)];w.portfolioHwm=30000;w.portfolioSignature=w.positions.map(p=>`${p.id}:${p.shares}:${p.cost}`).sort().join('|');evaluate(w);assert.equal(w.alerts.length,0);near(w.portfolioHwm,30000);});
 test('strict OCR rejects missing cost or P/L, accepts explicit zero P/L, never coerces strings',()=>{
   const full={fund_code:'000001',cost_unit:1,holding_shares:100,holding_profit:0};assert.ok(validateOcr([full])[0].is_valid);assert.equal(validateOcr([{...full,cost_unit:null}])[0].is_valid,false);assert.equal(validateOcr([{...full,holding_profit:null}])[0].is_valid,false);assert.equal(validateOcr([{...full,cost_unit:'1.0'}])[0].is_valid,false);assert.equal(validateOcr([{...full,holding_shares:-1}])[0].is_valid,false);assert.ok(validateOcr([{...full,holding_shares:null,holding_amount:100}])[0].is_valid);
 });

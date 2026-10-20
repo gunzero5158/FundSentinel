@@ -6,13 +6,14 @@ import {positionSchema,ruleSchema,validateOcr} from '@/lib/validation';
 import {emptyWorkspace,evaluate,latest,VERSION} from '@/lib/domain';
 import {demoWorkspace} from '@/lib/demo';
 import {fetchFund,historicalPeak} from '@/lib/fetcher';
-import {deliverPending,queueNotifications,validateEndpoint} from '@/lib/notifications';
+import {armChannel,compactOutbox,deliverPending,queueNotifications,validateEndpoint} from '@/lib/notifications';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
 type Context={params:Promise<{path:string[]}>};
-function verifyOrigin(r:NextRequest){const origin=r.headers.get('origin');const expected=process.env.APP_URL||`${r.nextUrl.protocol}//${r.headers.get('host')}`;if(origin && origin!==expected)throw new HttpError(403,'请求来源不匹配');}
+// Same-origin requests are always accepted, so opening the local app as localhost or 127.0.0.1 both work.
+function verifyOrigin(r:NextRequest){const origin=r.headers.get('origin');const self=`${r.nextUrl.protocol}//${r.headers.get('host')}`,expected=process.env.APP_URL||self;if(origin && origin!==expected && origin!==self)throw new HttpError(403,'请求来源不匹配');}
 async function body(r:NextRequest){if(Number(r.headers.get('content-length')??0)>900_000)throw new HttpError(413,'请求过大');const text=await r.text();if(text.length>900_000)throw new HttpError(413,'请求过大');try{return JSON.parse(text);}catch{throw new HttpError(400,'JSON 格式无效');}}
 function secretMatches(value:string|null){const expected=process.env.MONITOR_SECRET;if(!expected||expected.length<32||!value)return false;const a=Buffer.from(expected),b=Buffer.from(value);return a.length===b.length&&timingSafeEqual(a,b);}
 async function syncUser(user:string,codes?:string[],final=true,evaluateOnly=false){
@@ -25,7 +26,7 @@ async function syncUser(user:string,codes?:string[],final=true,evaluateOnly=fals
     if(!w.positions.some(p=>p.code===code))throw new HttpError(400,'基金不属于当前工作区');
     try{const f=await fetchFund(code),prev=w.funds[code];if(!prev||latest(f).date>=latest(prev).date)w.funds[code]=f;}catch(e){w.syncErrors.push(e instanceof Error?e.message:'同步失败');}
   }));
-  if(final){evaluate(w);w.lastSync=new Date().toISOString();queueNotifications(w);w.deliveryLease={owner:randomUUID(),expires:Date.now()+55_000};}
+  if(final){evaluate(w);w.lastSync=new Date().toISOString();queueNotifications(w);compactOutbox(w);w.deliveryLease={owner:randomUUID(),expires:Date.now()+55_000};}
   // Durable outbox precedes external delivery; failed delivery never drops an alert.
   await save(user,w,revision);
   if(final){await deliverPending(w);delete w.deliveryLease;await save(user,w,w.revision);}
@@ -64,7 +65,8 @@ async function handle(r:NextRequest,ctx:Context){
       if(!process.env.VISION_API_KEY)throw new HttpError(503,'尚未配置 Vision API；可使用手动录入');
       const {image}=z.object({image:z.string().max(700_000).regex(/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/)}).parse(await body(r));
       const date=new Date(Date.now()+8*3600_000).toISOString().slice(0,10),usage=w.ocrUsage?.date===date?w.ocrUsage:{date,count:0};
-      if(usage.count>=40)throw new HttpError(429,'今日截图识别已达 40 张上限，请改用手动录入');
+      const limit=Number(process.env.OCR_DAILY_LIMIT)||40;
+      if(usage.count>=limit)throw new HttpError(429,`今日截图识别已达 ${limit} 张上限，请改用手动录入`);
       w.ocrUsage={date,count:usage.count+1};await save(user,w,revision);
       const endpoint=new URL((process.env.VISION_BASE_URL??'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/,'')+'/chat/completions');
       if(endpoint.protocol!=='https:')throw new HttpError(500,'Vision 服务必须使用 HTTPS');
@@ -106,18 +108,26 @@ async function handle(r:NextRequest,ctx:Context){
       p.lastEvaluated=t.date;
     }else if(route==='wechat-subscribe'){
       const c=w.channels.find(c=>c.kind==='wechat');if(!c)throw new HttpError(400,'请先通过微信登录');
-      c.enabled=true;c.remaining=(c.remaining??0)+1;
+      if(!c.enabled)armChannel(w,c);c.enabled=true;c.remaining=(c.remaining??0)+1;
     }else if(route==='read-alerts'){
       w.alerts=w.alerts.map(a=>({...a,read:true}));
     }else if(route==='channels'){
       const input=z.object({kind:z.enum(['bark','wecom','feishu','dingtalk','pushplus','serverchan']),endpoint:z.string().max(2000),enabled:z.boolean()}).parse(data);validateEndpoint(input.kind,input.endpoint);
-      w.channels=[...w.channels.filter(c=>c.kind!==input.kind),{...input,id:input.kind}];
+      const old=w.channels.find(c=>c.id===input.kind),c={...input,id:input.kind,cursor:old?.cursor};if(!old?.enabled&&c.enabled)armChannel(w,c);
+      w.channels=[...w.channels.filter(c=>c.kind!==input.kind),c];
     }else if(route==='remove-channel'){
-      const {id}=z.object({id:z.string()}).parse(data);w.channels=w.channels.filter(c=>c.id!==id);
+      const {id}=z.object({id:z.string()}).parse(data);w.channels=w.channels.filter(c=>c.id!==id);w.deliveries=w.deliveries.filter(d=>d.channelId!==id);
     }else if(route==='remove-rule'){
       const {id}=z.object({id:z.string()}).parse(data);w.rules=w.rules.filter(v=>v.id!==id);
+      for(const key of Object.keys(w.states))if(key.startsWith(`${id}:`))delete w.states[key];
     }else if(route==='archive-position'){
       const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');p.holding=false;p.shares=0;p.cost=0;
+      evaluate(w);
+    }else if(route==='remove-position'){
+      const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');
+      w.positions=w.positions.filter(v=>v.id!==id);
+      if(!w.positions.some(v=>v.code===p.code))delete w.funds[p.code];
+      for(const key of Object.keys(w.states))if(key.endsWith(`:${id}`))delete w.states[key];
       evaluate(w);
     }else throw new HttpError(404,'接口不存在');
     await save(user,w,revision);return NextResponse.json(publicWorkspace(w));

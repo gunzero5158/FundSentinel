@@ -41,7 +41,8 @@ def parse_cdn(code: str, source: str) -> dict:
     zone = dt.timezone(dt.timedelta(hours=8))
     def date(value):
         return dt.datetime.fromtimestamp(float(value) / 1000, zone).date().isoformat()
-    cumulative = {date(t): positive(v) for t, v in assignment(source, "Data_ACWorthTrend")}
+    # The source occasionally publishes null cumulative NAV for a few dates; derive them instead of failing the fund.
+    cumulative = {date(t): positive(v) for t, v in assignment(source, "Data_ACWorthTrend") if v is not None and float(v) > 0}
     points = {}
     for raw in assignment(source, "Data_netWorthTrend"):
         day = date(raw["x"])
@@ -49,10 +50,14 @@ def parse_cdn(code: str, source: str) -> dict:
         rate = float(rate) if rate is not None else None
         if rate is not None and not math.isfinite(rate):
             rate = None
-        points[day] = {"date": day, "nav": positive(raw["y"]), "acc": cumulative[day], "daily": rate, "dividend": str(raw.get("unitMoney") or "").strip(), "adj": None}
+        points[day] = {"date": day, "nav": positive(raw["y"]), "acc": cumulative.get(day), "daily": rate, "dividend": str(raw.get("unitMoney") or "").strip(), "adj": None}
     history = sorted(points.values(), key=lambda p: p["date"])
     if not history:
         raise ValueError("Empty NAV history")
+    for index, point in enumerate(history):
+        if point["acc"] is None:
+            previous = history[index - 1] if index else None
+            point["acc"] = previous["acc"] + point["nav"] - previous["nav"] if previous and not point["dividend"] else point["nav"]
     reliable = True
     adjusted = history[0]["nav"]
     for index, point in enumerate(history):
@@ -72,7 +77,7 @@ def fetch_akshare(code: str) -> dict:
     frame = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
     acc = ak.fund_open_fund_info_em(symbol=code, indicator="累计净值走势")
     adjusted = ak.fund_open_fund_info_em(symbol=code, indicator="累计收益率走势", period="成立来")
-    cumulative = {str(row.iloc[0])[:10]: positive(row.iloc[1]) for _, row in acc.iterrows()}
+    cumulative = {str(row.iloc[0])[:10]: positive(row.iloc[1]) for _, row in acc.iterrows() if float(row.iloc[1]) > 0}
     returns = {str(row.iloc[0])[:10]: float(row.iloc[1]) for _, row in adjusted.iterrows()}
     points = []
     for _, row in frame.iterrows():
@@ -82,9 +87,10 @@ def fetch_akshare(code: str) -> dict:
         points.append({"date": day, "nav": positive(row.iloc[1]), "acc": cumulative[day], "adj": 1 + returns[day] / 100 if day in returns else None, "daily": None, "dividend": ""})
     if not points:
         raise ValueError("AKShare NAV is empty")
+    points.sort(key=lambda p: p["date"])
     # Fallback lacks corporate-action text: block personal rules until explicit calibration.
     points[-1]["dividend"] = "备用源无法确认除权信息，请核对份额与成本"
-    return {"code": code, "name": code, "type": "公募基金", "source": "AKShare · 东方财富备用", "history": sorted(points, key=lambda p: p["date"]), "adjustmentReliable": all(p["adj"] is not None for p in points), "fetchedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
+    return {"code": code, "name": code, "type": "公募基金", "source": "AKShare · 东方财富备用", "history": points, "adjustmentReliable": all(p["adj"] is not None for p in points), "fetchedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
 
 def fetch_sina(code: str) -> dict:
     points = []
