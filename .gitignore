@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.env*
+!.env.example
+data/
+*.tsbuildinfo
+__pycache__/
+*.pyc
+test-results/
+miniapp/dist/

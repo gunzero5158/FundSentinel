@@ -1,0 +1,30 @@
+name: FundSentinel confirmed NAV monitor
+on:
+  schedule:
+    # UTC -> Beijing 21:17, 22:47, 08:47. Daily runs also cover late QDII/FOF and holidays.
+    - cron: '17 13 * * *'
+    - cron: '47 14 * * *'
+    - cron: '47 0 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fund-sentinel-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python run_daily_monitor.py
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APP_URL: ${{ secrets.APP_URL }}
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
