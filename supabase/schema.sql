@@ -53,15 +53,26 @@ create policy "Own rules read" on public.alert_rules for select to authenticated
 revoke all on public.wechat_identities,public.system_heartbeat from anon,authenticated;
 grant select on public.funds,public.workspace_meta,public.user_positions,public.alert_rules to authenticated;
 
+-- Raw points still needed after the precomputed digest: the largest uncommon rule window, the latest two points,
+-- and everything since the position was added or last evaluated. History is sorted, so the result is a suffix.
+create function public.history_tail(p_history jsonb,p_window integer,p_since text) returns jsonb language sql immutable set search_path=public as $$
+  select coalesce(jsonb_agg(e order by i),'[]') from jsonb_array_elements(p_history) with ordinality t(e,i)
+  where i > jsonb_array_length(p_history)-(p_window+2) or e->>'date' >= p_since;
+$$;
 create function public.load_workspace(p_user uuid) returns jsonb language plpgsql security invoker set search_path=public as $$
-declare meta public.workspace_meta; result jsonb;
+declare meta public.workspace_meta; result jsonb; tail_window integer;
 begin
   select * into meta from public.workspace_meta where user_id=p_user;
   if not found then return null; end if;
+  -- 60/252/1260 are precomputed in the digest; other rule windows need raw points.
+  select coalesce(max((payload->>'window')::integer) filter (where (payload->>'window')::integer not in (60,252,1260)),0) into tail_window from public.alert_rules where user_id=p_user;
   result := meta.payload || jsonb_build_object('revision',meta.revision,
     'positions',coalesce((select jsonb_agg(payload order by id) from public.user_positions where user_id=p_user),'[]'),
     'rules',coalesce((select jsonb_agg(payload order by id) from public.alert_rules where user_id=p_user),'[]'),
-    'funds',coalesce((select jsonb_object_agg(f.fund_code,f.payload) from public.funds f where exists(select 1 from public.user_positions p where p.user_id=p_user and p.fund_code=f.fund_code)),'{}'));
+    -- A fund without a current digest is returned in full once so the server can compute and store it.
+    'funds',coalesce((select jsonb_object_agg(f.fund_code,case when f.payload->'stats'->>'fetchedAt' is distinct from f.payload->>'fetchedAt' or f.payload->'stats'->>'lastDate' is distinct from f.payload->'history'->-1->>'date' then f.payload
+        else (f.payload-'history') || jsonb_build_object('partial',true,'history',public.history_tail(f.payload->'history',tail_window,p.since)) end)
+      from public.funds f join (select fund_code,min(least(payload->>'addedAt',coalesce(payload->>'lastEvaluated',payload->>'addedAt'))) as since from public.user_positions where user_id=p_user group by fund_code) p using(fund_code)),'{}'));
   return result;
 end $$;
 create function public.commit_workspace(p_user uuid,p_expected integer,p_workspace jsonb) returns void language plpgsql security invoker set search_path=public as $$
@@ -71,6 +82,8 @@ begin
   select revision into current_revision from public.workspace_meta where user_id=p_user for update;
   if coalesce(current_revision,0) <> p_expected then raise exception 'revision conflict'; end if;
   for code,item in select key,value from jsonb_each(p_workspace->'funds') loop
+    -- A loaded tail must never replace the stored full history.
+    if coalesce((item->>'partial')::boolean,false) then continue; end if;
     insert into public.funds(fund_code,payload) values(code,item)
     on conflict(fund_code) do update set payload=excluded.payload,updated_at=now()
     where (excluded.payload->'history'->-1->>'date') >= (funds.payload->'history'->-1->>'date');
@@ -95,4 +108,9 @@ create function public.upsert_fund(p_code text,p_payload jsonb) returns void lan
 $$;
 revoke execute on function public.upsert_fund(text,jsonb) from public,anon,authenticated;
 grant execute on function public.upsert_fund(text,jsonb) to service_role;
+create function public.set_fund_stats(p_code text,p_stats jsonb) returns void language sql security invoker set search_path=public as $$
+  update public.funds set payload=jsonb_set(payload,'{stats}',p_stats) where fund_code=p_code and payload->>'fetchedAt'=p_stats->>'fetchedAt';
+$$;
+revoke execute on function public.set_fund_stats(text,jsonb),public.history_tail(jsonb,integer,text) from public,anon,authenticated;
+grant execute on function public.set_fund_stats(text,jsonb),public.history_tail(jsonb,integer,text) to service_role;
 commit;

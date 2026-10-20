@@ -3,7 +3,7 @@ import {createClient} from '@supabase/supabase-js';
 import {mkdir,readFile,writeFile,rename,open,unlink,stat} from 'node:fs/promises';
 import path from 'node:path';
 import {createCipheriv,createDecipheriv,randomBytes} from 'node:crypto';
-import {emptyWorkspace,Workspace,Channel,fundMetrics} from './domain';
+import {emptyWorkspace,Workspace,Channel,fundMetrics,digest,freshDigest} from './domain';
 
 export const cloud=()=>!!process.env.NEXT_PUBLIC_SUPABASE_URL;
 export function admin(){
@@ -56,6 +56,11 @@ export async function load(user:string):Promise<Workspace>{
     if(!data)return emptyWorkspace();
     const channels=unseal(data.encrypted_channels??'');delete data.encrypted_channels;
     const w:Workspace={...emptyWorkspace(),...data,channels};
+    // A fund written without a current digest (e.g. by the Python monitor) arrives in full once; digest it and store
+    // the digest so later loads only receive the tail. The write is guarded by fetchedAt and is safe to repeat.
+    for(const f of Object.values(w.funds))if(!f.partial&&!freshDigest(f)){
+      f.stats=digest(f);const {error}=await admin().rpc('set_fund_stats',{p_code:f.code,p_stats:f.stats});if(error)console.error('set_fund_stats',f.code,error.message);
+    }
     loadedFunds.set(w,new Map(Object.entries(w.funds).map(([code,f])=>[code,fundVersion(f)])));
     return w;
   }
@@ -64,7 +69,8 @@ export async function load(user:string):Promise<Workspace>{
 export async function save(user:string,w:Workspace,expected:number):Promise<void>{
   if(cloud()){
     const {channels,...rest}=w,loaded=loadedFunds.get(w);
-    const funds=Object.fromEntries(Object.entries(w.funds).filter(([code,f])=>loaded?.get(code)!==fundVersion(f)));
+    // Never write a loaded tail back over the full history; written funds carry their digest.
+    const funds=Object.fromEntries(Object.entries(w.funds).filter(([code,f])=>!f.partial&&loaded?.get(code)!==fundVersion(f)).map(([code,f])=>[code,{...f,stats:freshDigest(f)??digest(f)}]));
     const {error}=await admin().rpc('commit_workspace',{p_user:user,p_expected:expected,p_workspace:{...rest,funds,encrypted_channels:seal(channels)}});
     if(error)throw new HttpError(error.message.includes('revision conflict')?409:500,error.message);
     w.revision=expected+1;loadedFunds.set(w,new Map(Object.entries(w.funds).map(([code,f])=>[code,fundVersion(f)])));return;
@@ -89,12 +95,12 @@ export function publicWorkspace(w:Workspace){
   const funds=Object.fromEntries(Object.entries(w.funds).map(([code,f])=>{
     const summaries=Object.fromEntries(windows.flatMap(window=>[0,3,5].map(years=>[`${window}:${years}`,fundMetrics(f,window,years)])));
     const p=w.positions.find(p=>p.code===code);
-    if(p)summaries.sinceAdded=fundMetrics({...f,history:f.history.filter(h=>h.date>=p.addedAt),summaries:undefined},1_000_000);
+    if(p)summaries.sinceAdded=fundMetrics({...f,history:f.history.filter(h=>h.date>=p.addedAt),summaries:undefined,stats:undefined},1_000_000);
     // Full-resolution histories remain in the database. Downsample only chart transport,
     // preserving the latest two daily points and full-series precomputed risk metrics.
     const step=Math.max(1,Math.ceil(f.history.length/398));
-    const history=f.history.filter((_,i)=>i%step===0||i>=f.history.length-2);
-    return [code,{...f,history,summaries}];
+    const history=freshDigest(f)?.chart??f.history.filter((_,i)=>i%step===0||i>=f.history.length-2);
+    return [code,{...f,history,summaries,stats:undefined,partial:undefined}];
   }));
   return {...w,funds,channels:w.channels.map(c=>({...c,endpoint:'••••••（已保存）'}))};
 }

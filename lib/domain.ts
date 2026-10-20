@@ -2,7 +2,9 @@ export const VERSION = '0.1.0';
 export const DISCLAIMER = '本工具仅基于公开历史净值及用户自行录入的数据提供客观指标计算与阈值通知，不构成任何投资建议。';
 export type Point = {date: string; nav: number; acc: number; adj: number | null; daily: number | null; dividend: string};
 export type FundStats = {reliable:boolean;stageDD:number;mdd:number;histDD:number;ratio:number;downDays:number;daily:number;peak:number};
-export type Fund = {code: string; name: string; type: string; source: string; history: Point[]; adjustmentReliable: boolean; fetchedAt: string; summaries?:Record<string,FundStats>};
+// Full-history metrics precomputed once per NAV update, so reads need only a short tail of raw points.
+export type FundDigest = {fetchedAt:string;lastDate:string;reliable:boolean;daily:number;downDays:number;years:Record<string,{mdd:number;histDD:number;peak:number}>;stage:Record<string,number>;chart:Point[]};
+export type Fund = {code: string; name: string; type: string; source: string; history: Point[]; adjustmentReliable: boolean; fetchedAt: string; summaries?:Record<string,FundStats>; stats?:FundDigest; partial?:boolean};
 export type Position = {id: string; code: string; holding: boolean; shares: number; cost: number; hwm: number; hwmDate: string; addedAt: string; lastEvaluated?: string; needsCalibration: boolean};
 export const RULE_TYPES = ['TRAILING_STOP_NAV','TRAILING_STOP_RET','TRAILING_STOP_PROFIT','FIXED_TAKE_PROFIT','FIXED_STOP_LOSS','PORTFOLIO_DD','FUND_STAGE_DD','FUND_HIST_MDD','FUND_DAILY_VOL','FUND_DOWN_DAYS'] as const;
 export type RuleType = typeof RULE_TYPES[number];
@@ -34,8 +36,27 @@ export function positionMetrics(p: Position,f: Fund) {
     hwmReturn:p.cost>0?(hwm/p.cost-1)*100:0,ddNav:(hwm-t.nav)/hwm*100,ddRet:p.cost>0?(hwm-t.nav)/p.cost*100:0,
     ddProfit:hwm>p.cost?(hwm-t.nav)/(hwm-p.cost)*100:0,today:prev?p.shares*(t.nav-prev.nav):null};
 }
+export const DIGEST_WINDOWS=[60,252,1260];
+export const freshDigest=(f: Fund)=>f.stats&&f.stats.fetchedAt===f.fetchedAt&&f.stats.lastDate===f.history.at(-1)?.date?f.stats:undefined;
+export function digest(f: Fund):FundDigest {
+  const step=Math.max(1,Math.ceil(f.history.length/398)),base=computeMetrics(f,252,0);
+  return {fetchedAt:f.fetchedAt,lastDate:latest(f).date,reliable:base.reliable,daily:base.daily,downDays:base.downDays,
+    years:Object.fromEntries([0,3,5].map(y=>{const m=computeMetrics(f,252,y);return [y,{mdd:m.mdd,histDD:m.histDD,peak:m.peak}];})),
+    stage:Object.fromEntries(DIGEST_WINDOWS.map(w=>[w,computeMetrics(f,w,0).stageDD])),
+    // Chart transport keeps every step-th point and the latest two daily points.
+    chart:f.history.filter((_,i)=>i%step===0||i>=f.history.length-2)};
+}
 export function fundMetrics(f: Fund,window=252,historyYears=0):FundStats {
   if(f.summaries?.[`${window}:${historyYears}`])return f.summaries[`${window}:${historyYears}`];
+  const d=freshDigest(f),y=d?.years[historyYears];
+  if(!d||!y)return computeMetrics(f,window,historyYears);
+  if(!d.reliable)return {reliable:false,stageDD:0,mdd:0,histDD:0,ratio:0,downDays:0,daily:0,peak:0};
+  // Uncommon windows use the tail, which the loader sizes to cover the largest rule window.
+  let stageDD=d.stage[window];
+  if(stageDD===undefined){const values=f.history.map(p=>p.adj!),cur=values.at(-1)!,peak=Math.max(...values.slice(-Math.max(1,window)));stageDD=(peak-cur)/peak*100;}
+  return {reliable:true,stageDD,mdd:y.mdd,histDD:y.histDD,ratio:y.mdd>0?y.histDD/y.mdd*100:0,downDays:d.downDays,daily:d.daily,peak:y.peak};
+}
+function computeMetrics(f: Fund,window: number,historyYears: number):FundStats {
   const reliable=f.adjustmentReliable && f.history.length>0 && f.history.every(p=>p.adj!==null), points=f.history;
   if(!reliable) return {reliable:false,stageDD:0,mdd:0,histDD:0,ratio:0,downDays:0,daily:0,peak:0};
   const values=points.map(p=>p.adj!), cur=values.at(-1)!;
@@ -56,7 +77,7 @@ export function effectiveRules(w: Workspace,code: string): Rule[] {
 export function ruleValue(r: Rule,p: Position,f: Fund): number | null {
   const m=positionMetrics(p,f);
   const since=f.history.filter(point=>point.date>=p.addedAt);
-  const fm=r.type==='FUND_STAGE_DD'&&r.window===0?(f.summaries?.sinceAdded??fundMetrics({...f,history:since,summaries:undefined},1_000_000)):fundMetrics(f,r.window,r.historyYears??0);
+  const fm=r.type==='FUND_STAGE_DD'&&r.window===0?(f.summaries?.sinceAdded??fundMetrics({...f,history:since,summaries:undefined,stats:undefined},1_000_000)):fundMetrics(f,r.window,r.historyYears??0);
   if(r.type.startsWith('FUND_')){
     if(!fm.reliable) return null;
     return {FUND_STAGE_DD:fm.stageDD,FUND_HIST_MDD:fm.mdd>0?fm.ratio:null,FUND_DAILY_VOL:Math.abs(fm.daily),FUND_DOWN_DAYS:fm.downDays}[r.type as 'FUND_STAGE_DD'];

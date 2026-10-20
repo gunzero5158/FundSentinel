@@ -39,6 +39,8 @@ npm start
 
 `shares × unit NAV` 用于个人市值。普通交易日按精确单位净值比率连续复利，除权日使用数据源披露的含分红每日收益率重建复权曲线（除权日收益率取源站精度）；不以累计净值冒充复权净值。缺失除权/复权元数据时不推算历史风险，也不发送未经校准的个人回撤提醒。备用源会显式标识并要求校准。
 
+每次净值更新后，服务端把完整历史上的长期指标（全历史/近 3 年/近 5 年极值与最大回撤、60/252/1260 日阶段回撤、图表抽样点）预先算好存入基金记录；之后读取只取这份摘要加上最近一段原始净值（覆盖自定义窗口和加入观察以来的天数），不再每次读出完整历史。
+
 基金历史最大回撤基准排除最新净值日，防止当天创新低时分母同步变大而掩盖突破。默认历史基准为数据源完整可用历史；阶段窗口以净值交易日数计数。历史序列保留在数据库，发往前端的图形最多约 400 点，风险指标始终在完整序列上计算。
 
 组合份额/成本改变时重建组合高水位，避免将出入金误算为回撤；QDII/FOF 净值通常晚一天以上，组合按各基金最新确认净值计算，并在全部持仓都更新到新净值后评估一次组合提醒（以最晚到齐的净值日期去重）。混合日期的最近一日盈亏在界面明确标记，不能冒充同一个交易日的组合收益。
@@ -53,7 +55,7 @@ npm start
 
 ## Supabase + Vercel 部署
 
-1. 用自己的账号新建 Supabase 项目，在 SQL Editor 对新库执行 `supabase/schema.sql`。脚本创建 `funds`、`user_positions`、`alert_rules`、工作区元数据、心跳和微信身份映射表。
+1. 用自己的账号新建 Supabase 项目，在 SQL Editor 对新库执行 `supabase/schema.sql`。如果数据库是用 2026-10-20 之前的 `schema.sql` 建的，再执行一次 `supabase/migrations/002_read_optimization.sql`（只替换函数，不动数据）。脚本创建 `funds`、`user_positions`、`alert_rules`、工作区元数据、心跳和微信身份映射表。
 2. 在本地或 Vercel 设置 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_ROLE_KEY`。服务角色密钥不应出现在 `NEXT_PUBLIC_*`、浏览器或小程序中。
 3. Supabase Authentication 配置站点 URL 和允许的重定向 URL，开启邮件登录。仅自用时建议设置 `ALLOWED_EMAILS` 为你的邮箱，或在 Supabase 关闭新用户注册，避免他人注册后消耗你的识图额度。Next.js API 验证 Supabase bearer 用户身份，不接收客户端指定的用户 ID。数据库 RLS 也只允许用户读取自己的记录；写入通过受保护的服务端接口和事务 RPC。
 4. 生成独立的 `MONITOR_SECRET`（至少 32 字符）与 `CHANNEL_ENCRYPTION_KEY`（64 位 hex）：
