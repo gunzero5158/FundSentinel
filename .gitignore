@@ -8,3 +8,10 @@ __pycache__/
 *.pyc
 test-results/
 miniapp/dist/
+
+# 本地工作记录、分析文档与临时测试（本地磁盘保留归档，不提交至 GitHub）
+docs/workflow_failure_analysis.md
+docs/position_edit_feature_and_workflow_disable.md
+docs/skills_audit_and_recommendations.md
+docs/local/
+tests/verify_edit.mjs
