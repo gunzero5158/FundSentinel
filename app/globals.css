@@ -14,3 +14,13 @@
 .flex-1{flex:1}
 .danger-button{min-height:38px;padding:9px 14px;border-radius:5px;font-size:13px;font-weight:500;white-space:nowrap;background:#fff;border:1px solid #edd4ce;color:#cd6358}
 .danger-button:hover{background:#fdf2f0;border-color:#cd6358}
+
+.strategy-guide-box{background:#f3f7f0;border:1px solid #dce8d5;border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:12px;color:#4c6b45;line-height:1.7}
+.strategy-guide-box strong{display:block;margin-bottom:4px;color:#2c5332;font-weight:600}
+.strategy-guide-box p{margin:0;font-size:11px;color:#597554}
+.input-with-affix{display:flex;align-items:center;border:1px solid #dce5d3;border-radius:5px;background:#fff;transition:border-color .15s}
+.input-with-affix:focus-within{border-color:#327a5d;box-shadow:0 0 0 1px #327a5d}
+.input-prefix{padding:0 8px;font-size:11px;color:#6b8265;background:#f5f8f2;border-right:1px solid #e1eadc;white-space:nowrap;user-select:none;height:38px;display:flex;align-items:center}
+.input-suffix{padding:0 10px;font-size:11px;color:#6b8265;background:#f5f8f2;border-left:1px solid #e1eadc;white-space:nowrap;user-select:none;height:38px;display:flex;align-items:center}
+.input-with-affix input{border:0!important;border-radius:0!important;padding:8px 10px!important;outline:none!important;box-shadow:none!important;font-size:13px;flex:1;min-width:0}
+.form-hint{display:block;font-size:10px;color:#889a83;line-height:1.4;margin-top:4px}
