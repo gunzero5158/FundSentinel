@@ -48,7 +48,7 @@ export async function fetchFund(code:string):Promise<Fund> {
   let error:unknown;
   for(let attempt=0;attempt<3;attempt++){
     try{
-      const response=await fetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`,{signal:AbortSignal.timeout(18000),cache:'no-store',redirect:'error',headers:{'User-Agent':'FundSentinel/0.1.0','Referer':'https://fund.eastmoney.com/'}});
+      const response=await fetch(`https://fund.eastmoney.com/pingzhongdata/${code}.js`,{signal:AbortSignal.timeout(18000),cache:'no-store',redirect:'error',headers:{'User-Agent':'FundSentinel/0.2.0','Referer':'https://fund.eastmoney.com/'}});
       if(!response.ok)throw new Error(`净值源 HTTP ${response.status}`);
       const source=await response.text();if(source.length>8_000_000)throw new Error('净值响应过大');
       const fund=parseEastmoney(code,source),today=new Date(Date.now()+8*3600_000).toISOString().slice(0,10);

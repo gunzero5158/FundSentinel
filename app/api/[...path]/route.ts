@@ -87,11 +87,21 @@ async function handle(r:NextRequest,ctx:Context){
       const existing=w.positions.find(p=>p.id===input.id);
       if(input.id&&!existing)throw new HttpError(404,'持仓不存在');
       if(w.positions.some(p=>p.code===input.code&&p.id!==input.id))throw new HttpError(409,'此基金已存在，请编辑现有记录');
-      const f=await fetchFund(input.code),t=latest(f),peak=historicalPeak(f,input.peakMode,input.start,input.manual);
+      const isCodeChanged=Boolean(existing&&existing.code!==input.code);
+      const f=await fetchFund(input.code),t=latest(f);
+      let peak:{nav:number;date:string};
+      if(existing&&!isCodeChanged&&input.peakMode==='keep'){peak={nav:existing.hwm,date:existing.hwmDate};}else{peak=historicalPeak(f,input.peakMode==='keep'?'60':input.peakMode,input.start,input.manual);}
       w.funds[input.code]=f;
-      const p={id:existing?.id??randomUUID(),code:input.code,holding:input.holding,shares:input.holding?input.shares!:0,cost:input.holding?input.cost!:0,hwm:peak.nav,hwmDate:peak.date,addedAt:t.date,needsCalibration:false,lastEvaluated:t.date};
+      const p={id:existing?.id??randomUUID(),code:input.code,holding:input.holding,shares:input.holding?input.shares!:0,cost:input.holding?input.cost!:0,hwm:peak.nav,hwmDate:peak.date,addedAt:existing&&!isCodeChanged?existing.addedAt:t.date,needsCalibration:false,lastEvaluated:t.date};
       w.positions=existing?w.positions.map(old=>old.id===p.id?p:old):[...w.positions,p];
-      for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
+      if(isCodeChanged&&existing){
+        const oldCode=existing.code;
+        if(!w.positions.some(pos=>pos.id!==existing.id&&pos.code===oldCode))delete w.funds[oldCode];
+        w.rules=w.rules.map(r=>r.code===oldCode?{...r,code:input.code}:r);
+        for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
+      }else if(input.peakMode!=='keep'||(existing&&existing.holding!==input.holding)){
+        for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
+      }
       delete (p as {lastEvaluated?:string}).lastEvaluated;
       evaluate(w);
     }else if(route==='rules'){
@@ -101,10 +111,10 @@ async function handle(r:NextRequest,ctx:Context){
       for(const key of Object.keys(w.states))if(key.startsWith(`${id}:`))delete w.states[key];
       for(const p of w.positions)delete p.lastEvaluated;
       evaluate(w);
-    }else if(route==='reset-hwm'){
-      const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');
-      const t=latest(w.funds[p.code]);p.hwm=t.nav;p.hwmDate=t.date;p.addedAt=t.date;p.needsCalibration=false;
-      for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
+    }else if(route==='reset-hwm'){
+      const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');
+      const t=latest(w.funds[p.code]);p.hwm=t.nav;p.hwmDate=t.date;p.addedAt=t.date;p.needsCalibration=false;
+      for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
       p.lastEvaluated=t.date;
     }else if(route==='wechat-subscribe'){
       const c=w.channels.find(c=>c.kind==='wechat');if(!c)throw new HttpError(400,'请先通过微信登录');

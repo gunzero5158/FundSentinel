@@ -65,3 +65,4 @@ test('objective history can use 3-year / 5-year baseline or stage since observat
   const p={...position(),addedAt:f.history[3].date};near(ruleValue({...rule('FUND_STAGE_DD'),window:0},p,f)!,10);
 });
 test('historical personal watermarks never silently cross an uncalibrated ex-dividend event',()=>{const f=fund();f.history[1].dividend='每份分红';assert.throws(()=>historicalPeak(f,'60'),/分红或拆分/);near(historicalPeak(f,'today').nav,1.14);});
+test('holding validation accepts keep mode for updating positions and preserves existing inputs',()=>{assert.ok(positionSchema.safeParse({id:'p1',code:'000001',holding:true,shares:5000,cost:1.2,peakMode:'keep'}).success);assert.ok(positionSchema.safeParse({id:'p1',code:'000002',holding:false,peakMode:'keep'}).success);});
