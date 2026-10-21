@@ -90,7 +90,23 @@ async function handle(r:NextRequest,ctx:Context){
       const isCodeChanged=Boolean(existing&&existing.code!==input.code);
       const f=await fetchFund(input.code),t=latest(f);
       let peak:{nav:number;date:string};
-      if(existing&&!isCodeChanged&&input.peakMode==='keep'){peak={nav:existing.hwm,date:existing.hwmDate};}else{peak=historicalPeak(f,input.peakMode==='keep'?'60':input.peakMode,input.start,input.manual);}
+      if(existing&&!isCodeChanged&&input.peakMode==='keep'){
+        peak={nav:existing.hwm,date:existing.hwmDate};
+      }else if(input.peakMode==='auto'){
+        if(input.peakReturn!==undefined&&Number.isFinite(input.peakReturn)&&input.cost){
+          const hwmNav=input.cost*(1+input.peakReturn/100);
+          peak={nav:Math.max(hwmNav,t.nav),date:t.date};
+        }else if(input.cost){
+          peak={nav:t.nav>=input.cost?t.nav:input.cost,date:t.date};
+        }else{
+          peak={nav:t.nav,date:t.date};
+        }
+      }else if(input.peakMode==='cost'&&input.cost){
+        peak={nav:input.cost,date:t.date};
+      }else{
+        const mode=input.peakMode==='keep'||input.peakMode==='cost'?'60':input.peakMode;
+        peak=historicalPeak(f,mode,input.start,input.manual);
+      }
       w.funds[input.code]=f;
       const p={id:existing?.id??randomUUID(),code:input.code,holding:input.holding,shares:input.holding?input.shares!:0,cost:input.holding?input.cost!:0,hwm:peak.nav,hwmDate:peak.date,addedAt:existing&&!isCodeChanged?existing.addedAt:t.date,needsCalibration:false,lastEvaluated:t.date};
       w.positions=existing?w.positions.map(old=>old.id===p.id?p:old):[...w.positions,p];

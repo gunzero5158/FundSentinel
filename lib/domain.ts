@@ -1,4 +1,4 @@
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 export const DISCLAIMER = '本工具仅基于公开历史净值及用户自行录入的数据提供客观指标计算与阈值通知，不构成任何投资建议。';
 export type Point = {date: string; nav: number; acc: number; adj: number | null; daily: number | null; dividend: string};
 export type FundStats = {reliable:boolean;stageDD:number;mdd:number;histDD:number;ratio:number;downDays:number;daily:number;peak:number};

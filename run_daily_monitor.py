@@ -22,7 +22,7 @@ def main():
     required = ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "APP_URL", "MONITOR_SECRET"]
     missing = [key for key in required if not os.getenv(key)]
     if "--dry-run" in sys.argv:
-        print(json.dumps({"version": "0.2.0", "configured": not missing, "missing": missing, "schedule_beijing": ["21:17", "22:47", "08:47"]}, ensure_ascii=False))
+        print(json.dumps({"version": "0.2.1", "configured": not missing, "missing": missing, "schedule_beijing": ["21:17", "22:47", "08:47"]}, ensure_ascii=False))
         return
     if missing:
         raise RuntimeError("Missing configuration: " + ", ".join(missing))
