@@ -2,21 +2,121 @@
 import {useState} from 'react';
 import {Rule,RuleType,RULE_TYPES,RULE_NAMES} from '@/lib/domain';
 
-export const descriptions: Record<RuleType, string> = {
-  TRAILING_STOP_NAV: '（持仓最高净值 − 当前净值）÷ 最高净值 × 100%。需要真实持仓及有效成本。',
-  TRAILING_STOP_RET: '最高持仓收益率 − 当前收益率，单位为百分点。需要真实持仓及有效成本。',
-  TRAILING_STOP_PROFIT: '（最高净值 − 当前净值）÷（最高净值 − 成本价）× 100%，衡量已赚浮盈回吐多少。',
-  FIXED_TAKE_PROFIT: '累计持仓收益达到阈值；可按收益率或盈利金额计算。',
-  FIXED_STOP_LOSS: '累计持仓亏损达到阈值；输入正数，可按亏损率或亏损金额计算。',
-  PORTFOLIO_DD: '全部持仓总市值相对组合最高市值的回撤；份额或成本变化后重建高点。',
-  FUND_STAGE_DD: '当前复权净值相对观察窗口最高点的回撤，不要求持仓。',
-  FUND_HIST_MDD: '当前历史高点回撤 ÷ 历史最大回撤 × 100%。例如 90 表示达到历史最大回撤的九成；基准排除当前日。',
-  FUND_DAILY_VOL: '单日复权涨跌幅的绝对值，上涨和下跌均可触发，不要求持仓。',
-  FUND_DOWN_DAYS: '连续下跌的净值交易日数，持平或上涨中断连续计数，不要求持仓。'
+export interface RuleTypeMeta {
+  name: string;
+  badge: string;
+  summary: string;
+  scenario: string;
+  example: string;
+  formula: string;
+  requiresHolding: boolean;
+}
+
+export const RULE_META: Record<RuleType, RuleTypeMeta> = {
+  TRAILING_STOP_NAV: {
+    name: '最高净值相对回撤（经典推荐）',
+    badge: '移动止盈 · 保住利润',
+    summary: '最经典的动态止盈策略。当基金净值从买入以来的「历史最高点」掉下来达到指定幅度时报警，防止利润坐过山车。',
+    scenario: '适用于绝大多数偏股、混合型、指数型基金的获利保护与动态落袋为安。',
+    example: '例：基金最高涨到 1.500 元，设回跌 5% 预警，当净值跌破 1.425 元（自高点回撤 5%）时触发提醒。',
+    formula: '回撤幅度 =（历史最高净值 − 当前净值）÷ 历史最高净值 × 100%',
+    requiresHolding: true
+  },
+  TRAILING_STOP_RET: {
+    name: '持仓收益率回退点数',
+    badge: '收益率直减 · 直观明了',
+    summary: '直接对比持仓收益率百分点。如果最高浮盈曾达到 +20%，回退超过 5 个百分点（即降到 +15%）立即报警。',
+    scenario: '适合习惯直接根据理财 App 显示的持仓收益率百分比进行风控决策的投资者。',
+    example: '例：最高收益率曾到 25%，设回退 5 个百分点，当收益率跌回 20% 时触发预警。',
+    formula: '回退点数 = 最高持仓收益率（%） − 当前持仓收益率（%）',
+    requiresHolding: true
+  },
+  TRAILING_STOP_PROFIT: {
+    name: '已赚浮盈回吐比例',
+    badge: '利润缩水 · 敏感防守',
+    summary: '专门盯住「已经赚到的利润缩水了多少」。浮盈回吐达到指定比例时报警，绝不让到手的利润全部蒸发。',
+    scenario: '浮盈丰厚、极度厌恶利润回吐的保本型或阶段性落袋为安投资者。',
+    example: '例：本金 10 万，最高赚到 2 万元浮盈。设回吐 30% 预警，当利润缩水 6000 元（仅剩 1.4 万）时报警。',
+    formula: '回吐比例 =（最高浮盈金额 − 当前浮盈金额）÷ 最高浮盈金额 × 100%',
+    requiresHolding: true
+  },
+  FIXED_TAKE_PROFIT: {
+    name: '目标止盈线（达到就收）',
+    badge: '目标兑现 · 绝对收益',
+    summary: '当累计持仓收益达到预设的目标（如赚 15% 或赚 5000 元）时提醒卖出止盈。',
+    scenario: '定投达到预期年化目标、做波段止盈或有明确止盈目标的纪律性投资者。',
+    example: '例：设目标 15%，持仓收益率一旦达到或超过 15%，立即发通知提醒止盈。',
+    formula: '持仓收益率 ≥ 目标百分比，或累计收益额 ≥ 目标金额',
+    requiresHolding: true
+  },
+  FIXED_STOP_LOSS: {
+    name: '本金止损线（严控亏损）',
+    badge: '底线防御 · 截断亏损',
+    summary: '当持仓亏损达到设定底线（如亏 8% 或亏 3000 元）时报警，提醒纪律性止损减仓，避免本金深度套牢。',
+    scenario: '控制最大单笔损失，防止单只高风险赛道基金大幅下跌带来无法承受的损失。',
+    example: '例：设止损 8%，当持仓浮亏达到 −8% 时立即报警提醒。',
+    formula: '持仓亏损率 ≥ 止损百分比，或累计亏损额 ≥ 止损金额',
+    requiresHolding: true
+  },
+  PORTFOLIO_DD: {
+    name: '组合总资产高点回撤',
+    badge: '账户全局 · 系统性风控',
+    summary: '从整个账户全部持仓基金的「总市值历史最高峰」监控回撤，防范全盘系统性大跌风险。',
+    scenario: '管理多只基金的整体组合仓位，需要控制账户总资产回撤的投资者。',
+    example: '例：全部持仓总市值最高达到 20 万元，设组合回撤 5%，总市值跌至 19 万元时触发全盘预警。',
+    formula: '组合回撤 =（历史最高总市值 − 当前总市值）÷ 历史最高总市值 × 100%',
+    requiresHolding: true
+  },
+  FUND_STAGE_DD: {
+    name: '阶段窗口最高点回撤（客观）',
+    badge: '自选观察 · 阶段抗跌',
+    summary: '纯看基金自身净值走势（不要求个人持仓）。监控基金在近 N 个交易日内自阶段最高点的跌幅。',
+    scenario: '用于自选基金跟踪、等待回调买入机会或评估近期调整深度。',
+    example: '例：观察窗口 252 交易日（近1年），基金近 1 年最高净值跌落 10% 时提醒关注。',
+    formula: '阶段回撤 =（窗口期最高复权净值 − 当前复权净值）÷ 窗口期最高复权净值 × 100%',
+    requiresHolding: false
+  },
+  FUND_HIST_MDD: {
+    name: '历史最大回撤占比（客观）',
+    badge: '深度回测 · 极值预警',
+    summary: '评估当前跌幅在基金历史上属于什么水平。当回撤达到历史最惨跌幅的 90% 时报警，提醒可能遭遇极端行情。',
+    scenario: '排查基金经理是否遭遇历史上最严重的逆风期，辅助判断是否属于罕见极端低估或风格漂移。',
+    example: '例：基金历史最深跌幅是 20%，设比例 90%，当本轮跌幅达到 18% 时触发警报。',
+    formula: '占比 = 当前历史高点回撤 ÷ 基金历史最大回撤 (MDD) × 100%',
+    requiresHolding: false
+  },
+  FUND_DAILY_VOL: {
+    name: '单日异动涨跌幅（客观）',
+    badge: '单日异动 · 暴涨暴跌',
+    summary: '单日净值剧烈波动预警。当一天内净值涨跌幅绝对值超过阈值时提醒。',
+    scenario: '监控重仓股暴雷、突发黑天鹅事件或指数巨幅波动。',
+    example: '例：设阈值 3%，若单日净值大涨 +3.5% 或大跌 −3.2%，均触发异动提醒。',
+    formula: '| 单日复权净值涨跌幅 | ≥ 阈值 %',
+    requiresHolding: false
+  },
+  FUND_DOWN_DAYS: {
+    name: '连续下跌天数（客观）',
+    badge: '阴跌预警 · 情绪冰点',
+    summary: '连续阴跌天数监控。当基金连续 N 个交易日净值收绿下跌时报警提醒。',
+    scenario: '防范深不见底的持续阴跌行情，或者用于网格定投在连续阴跌后寻找补仓契机。',
+    example: '例：设连续 4 天，基金连续 4 个净值日收跌时触发提醒。',
+    formula: '连续每日涨跌幅 < 0 的交易日天数 ≥ 设定值',
+    requiresHolding: false
+  }
 };
 
+export const descriptions: Record<RuleType, string> = Object.fromEntries(
+  Object.entries(RULE_META).map(([k, v]) => [k, `${v.summary} ${v.example}`])
+) as Record<RuleType, string>;
+
 export function ruleUnit(type: RuleType, basis: string) {
-  return type === 'FUND_DOWN_DAYS' ? '个交易日' : type === 'TRAILING_STOP_RET' ? '个百分点' : type.startsWith('FIXED_') && basis === 'amount' ? '元' : '%';
+  return type === 'FUND_DOWN_DAYS'
+    ? '个交易日'
+    : type === 'TRAILING_STOP_RET'
+      ? '个百分点'
+      : type.startsWith('FIXED_') && basis === 'amount'
+        ? '元'
+        : '%';
 }
 
 export default function RuleForm({
@@ -35,7 +135,6 @@ export default function RuleForm({
   const isSingleFund = Boolean(scopeCode);
   const targetFund = isSingleFund ? funds.find(f => f.code === scopeCode) : undefined;
 
-  // Filter out PORTFOLIO_DD when configuring a single fund rule
   const availableTypes: readonly RuleType[] = isSingleFund
     ? (RULE_TYPES.filter(t => t !== 'PORTFOLIO_DD') as RuleType[])
     : RULE_TYPES;
@@ -43,17 +142,21 @@ export default function RuleForm({
   const [type, setType] = useState<RuleType>(
     rule?.type && (availableTypes as readonly string[]).includes(rule.type)
       ? rule.type
-      : (isSingleFund ? 'TRAILING_STOP_NAV' : (rule?.type ?? 'TRAILING_STOP_NAV'))
+      : isSingleFund
+        ? 'TRAILING_STOP_NAV'
+        : (rule?.type ?? 'TRAILING_STOP_NAV')
   );
   const [basis, setBasis] = useState(rule?.basis ?? 'pct');
   const [globalCodeChoice, setGlobalCodeChoice] = useState<string>(rule?.code ?? '');
 
-  const trailing = type.startsWith('TRAILING_'), fixed = type.startsWith('FIXED_'), unit = ruleUnit(type, basis), days = type === 'FUND_DOWN_DAYS';
+  const trailing = type.startsWith('TRAILING_'),
+    fixed = type.startsWith('FIXED_'),
+    unit = ruleUnit(type, basis),
+    days = type === 'FUND_DOWN_DAYS';
   const initial = rule?.type === type ? rule : undefined;
+  const currentMeta = RULE_META[type];
 
-  // Is this editing an existing rule that belongs specifically to this single fund?
   const isEditingOwnSpecificRule = isSingleFund && Boolean(rule?.id && rule.code === scopeCode);
-  // Is this based on a global rule being customized for a single fund?
   const isCustomizingFromGlobal = isSingleFund && Boolean(rule?.id && rule.code === null);
 
   const getFormData = (form: HTMLFormElement, mode: 'replace' | 'create_new') => {
@@ -64,12 +167,11 @@ export default function RuleForm({
         ? null
         : (globalCodeChoice || null);
 
-    // If customizing from a global rule in single-fund mode, never overwrite the global rule id!
     const effectiveId = mode === 'create_new'
       ? undefined
       : isCustomizingFromGlobal
         ? undefined
-        : rule?.id;
+        : (rule?.id || undefined);
 
     return {
       id: effectiveId,
@@ -92,8 +194,8 @@ export default function RuleForm({
       <span className="eyebrow">STRATEGY ENGINE</span>
       <h2>
         {isSingleFund
-          ? (rule ? `调整「${targetFund?.name ?? scopeCode}」策略` : `为「${targetFund?.name ?? scopeCode}」新建专属策略`)
-          : (rule ? '编辑规则 / 切换类型' : '创建新规则')}
+          ? (rule ? `调整「${targetFund?.name ?? scopeCode}」监控策略` : `为「${targetFund?.name ?? scopeCode}」新建专属策略`)
+          : (rule ? '编辑规则参数 / 切换模型' : '创建新监控规则')}
       </h2>
       <p>
         {isSingleFund
@@ -106,6 +208,17 @@ export default function RuleForm({
               ? (rule.code ? `当前编辑的是专属规则（标的：${funds.find(f => f.code === rule.code)?.name ?? rule.code}）。` : '当前编辑的是全局默认规则，修改后将对所有继承该规则的基金统一生效。')
               : '创建后将新增一条独立监控规则。多个规则可同时启用。')}
       </p>
+
+      {/* 四步运作全流程通俗导读卡片 */}
+      <div className="strategy-guide-box">
+        <strong>💡 策略工作全流程逻辑（通俗大白话）：</strong>
+        <p>
+          ① <b>开启门槛</b>：基金浮盈曾达到门槛后哨兵才正式上线（未赚钱不打扰）；<br/>
+          ② <b>回撤预警</b>：从高位回跌达到阈值触发首次报警；<br/>
+          ③ <b>防骚扰追报</b>：跌势加深时每多跌一个步长才升级提醒；<br/>
+          ④ <b>反弹解除</b>：回撤收窄至（阈值 − 缓冲）以下自动复位重新警戒。
+        </p>
+      </div>
 
       <form
         onSubmit={async e => {
@@ -125,15 +238,24 @@ export default function RuleForm({
           >
             {availableTypes.map(t => (
               <option key={t} value={t}>
-                {RULE_NAMES[t]}
+                {RULE_NAMES[t]} · {RULE_META[t].badge}
               </option>
             ))}
           </select>
         </label>
 
-        <div className="strategy-guide-box">
-          <strong>{RULE_NAMES[type]}</strong>
-          <p>{descriptions[type]}</p>
+        {/* 选中的具体规则的详尽解释卡片 */}
+        <div className="rule-detail-explainer-card">
+          <div className="rule-explainer-header">
+            <span className="rule-explainer-badge">{currentMeta.badge}</span>
+            <strong>{currentMeta.name}</strong>
+          </div>
+          <p className="rule-explainer-summary">📌 <b>核心定义</b>：{currentMeta.summary}</p>
+          <p className="rule-explainer-scenario">🎯 <b>适用场景</b>：{currentMeta.scenario}</p>
+          <p className="rule-explainer-example">🌰 <b>通俗举例</b>：{currentMeta.example}</p>
+          <div className="rule-explainer-formula">
+            <small>📐 <b>计算原理</b>：{currentMeta.formula}</small>
+          </div>
         </div>
 
         {isSingleFund ? (
@@ -175,93 +297,120 @@ export default function RuleForm({
 
         {fixed && (
           <label>
-            阈值口径
+            阈值计算口径
             <select value={basis} onChange={e => setBasis(e.target.value as 'pct' | 'amount')}>
-              <option value="pct">百分比（%）</option>
-              <option value="amount">金额（元）</option>
+              <option value="pct">按百分比（%）</option>
+              <option value="amount">按金额（元）</option>
             </select>
+            <small className="form-hint">可按收益/亏损百分比，或按实际盈利/亏损金额（元）触发</small>
           </label>
         )}
 
         <div className="form-grid" key={type + basis}>
           <label>
-            触发阈值（{unit}）
-            <input
-              name="threshold"
-              type="number"
-              min={days ? 1 : 0.01}
-              step={days ? 1 : 'any'}
-              defaultValue={initial?.threshold ?? (type === 'FUND_HIST_MDD' ? 90 : days ? 3 : 5)}
-              required
-            />
-            <small className="form-hint">达到此阈值时触发首次预警</small>
+            回撤预警触发阈值
+            <div className="input-with-affix">
+              <span className="input-prefix">从最高点回跌 ≥</span>
+              <input
+                name="threshold"
+                type="number"
+                min={days ? 1 : 0.01}
+                step={days ? 1 : 'any'}
+                defaultValue={initial?.threshold ?? (type === 'FUND_HIST_MDD' ? 90 : days ? 3 : 5)}
+                required
+              />
+              <span className="input-suffix">{unit}</span>
+            </div>
+            <small className="form-hint">
+              {type === 'FUND_DOWN_DAYS'
+                ? '连续下跌达到该交易日天数时触发预警'
+                : type === 'FUND_HIST_MDD'
+                  ? '达到历史最大回撤该比例时触发预警（如 90 表示九成历史最大跌幅）'
+                  : `自最高点回跌达到此数值时触发首次预警`}
+            </small>
           </label>
 
           {trailing && (
             <label>
-              最高浮盈开启门槛（%）
-              <input
-                name="activation"
-                type="number"
-                min="0"
-                step="any"
-                defaultValue={initial?.activation ?? 5}
-                required
-              />
-              <small className="form-hint">最高盈利曾 ≥ 该比例才开启监控（不赚不扰）</small>
+              回撤监控开启门槛
+              <div className="input-with-affix">
+                <span className="input-prefix">最高盈利曾 ≥</span>
+                <input
+                  name="activation"
+                  type="number"
+                  min="0"
+                  step="any"
+                  defaultValue={initial?.activation ?? 5}
+                  required
+                />
+                <span className="input-suffix">%</span>
+              </div>
+              <small className="form-hint">持仓最高浮盈曾达到该比例才启动监控；未达标前保持静默（不赚不扰）</small>
             </label>
           )}
 
           <label>
-            指标每增加多少追报（{unit}）
-            <input
-              name="step"
-              type="number"
-              min={days ? 1 : 0.01}
-              step={days ? 1 : 'any'}
-              defaultValue={initial?.step ?? (days ? 1 : 2)}
-              required
-            />
-            <small className="form-hint">恶化加深时每多跌该幅度追加提醒，区间震荡不骚扰</small>
+            加深升级提醒步长
+            <div className="input-with-affix">
+              <span className="input-prefix">恶化每多跌 ≥</span>
+              <input
+                name="step"
+                type="number"
+                min={days ? 1 : 0.01}
+                step={days ? 1 : 'any'}
+                defaultValue={initial?.step ?? (days ? 1 : 2)}
+                required
+              />
+              <span className="input-suffix">{unit}</span>
+            </div>
+            <small className="form-hint">首次报警后，每进一步深跌该幅度才追加提醒，区间震荡不骚扰</small>
           </label>
 
           <label>
-            解除预警缓冲（{unit}）
-            <input
-              name="buffer"
-              type="number"
-              min="0"
-              step={days ? 1 : 'any'}
-              defaultValue={initial?.buffer ?? (days ? 0 : 1)}
-              required
-            />
-            <small className="form-hint">反弹收复至「阈值 − 缓冲」以下复位；缓冲须小于阈值</small>
+            防反复横跳复位缓冲
+            <div className="input-with-affix">
+              <span className="input-prefix">反弹收复缓冲</span>
+              <input
+                name="buffer"
+                type="number"
+                min="0"
+                step={days ? 1 : 'any'}
+                defaultValue={initial?.buffer ?? (days ? 0 : 1)}
+                required
+              />
+              <span className="input-suffix">{unit}</span>
+            </div>
+            <small className="form-hint">反弹收窄至「阈值 − 缓冲」以下时才解除警报复位；缓冲须小于阈值</small>
           </label>
 
           {type === 'FUND_STAGE_DD' && (
             <label>
-              观察窗口（交易日）
-              <input
-                name="window"
-                type="number"
-                min="0"
-                max="10000"
-                defaultValue={initial?.window ?? 252}
-                required
-              />
+              历史观察周期窗口
+              <div className="input-with-affix">
+                <span className="input-prefix">近</span>
+                <input
+                  name="window"
+                  type="number"
+                  min="0"
+                  max="10000"
+                  defaultValue={initial?.window ?? 252}
+                  required
+                />
+                <span className="input-suffix">个交易日</span>
+              </div>
               <small className="form-hint">股市一年约 252 个交易日；填 0 为自加入自选日起</small>
             </label>
           )}
 
           {type === 'FUND_HIST_MDD' && (
             <label>
-              历史统计范围
+              历史极值统计范围
               <select name="historyYears" defaultValue={initial?.historyYears ?? 0}>
-                <option value="0">全部可用历史</option>
+                <option value="0">数据源全部可用历史</option>
                 <option value="3">近 3 年</option>
                 <option value="5">近 5 年</option>
               </select>
-              <small className="form-hint">计算历史最大回撤极值的历史跨度</small>
+              <small className="form-hint">计算历史最大跌幅极值时回溯的时间跨度</small>
             </label>
           )}
         </div>
@@ -285,7 +434,6 @@ export default function RuleForm({
               : (rule ? '保存修改' : '创建并启用规则')}
           </button>
 
-          {/* Additional action: Create as a new rule based on current settings */}
           {rule && (
             <button
               type="button"

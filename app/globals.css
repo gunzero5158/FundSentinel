@@ -66,3 +66,23 @@
 .small-btn{padding:6px 12px;font-size:12px}
 .danger-text{color:#b94d40!important}
 .danger-text:hover{background:#fdf2f0!important;border-color:#eec4be!important}
+
+/* Rule Detail Explainer Card */
+.rule-detail-explainer-card{background:#f6f9f3;border:1px solid #d8e5d2;border-radius:8px;padding:14px 16px;margin:14px 0 18px;font-size:12px;line-height:1.6}
+.rule-explainer-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.rule-explainer-badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;background:#e1ede0;color:#235738;border:1px solid #c2dbbe}
+.rule-explainer-header strong{font-size:14px;color:#1d422a}
+.rule-detail-explainer-card p{margin:4px 0;color:#476044;font-size:12px}
+.rule-explainer-summary{font-weight:500;color:#284f32!important}
+.rule-explainer-formula{margin-top:8px;padding-top:8px;border-top:1px dashed #d5e3ce;color:#70846e}
+.rule-explainer-formula small{font-size:11px}
+
+/* Explainer Accordion / Handbook */
+.handbook-card{background:#fff;border:1px solid #e1e9dc;border-radius:9px;padding:24px;margin-top:24px}
+.handbook-card h3{font-size:16px;color:#234a34;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.handbook-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.handbook-item{border:1px solid #e8eee4;border-radius:7px;padding:14px;background:#fbfdfa}
+.handbook-item strong{font-size:13px;color:#255037;display:block;margin-bottom:4px}
+.handbook-item p{font-size:11px;color:#5a6e57;margin:0 0 6px;line-height:1.5}
+.handbook-item small{font-size:10px;color:#859682;display:block}
+@media(max-width:900px){.handbook-grid{grid-template-columns:1fr}}
