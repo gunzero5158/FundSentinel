@@ -14,7 +14,9 @@ export const RULE_NAMES: Record<RuleType,string> = {
   FIXED_TAKE_PROFIT: '累计收益阈值', FIXED_STOP_LOSS: '累计亏损阈值', PORTFOLIO_DD: '组合高点回撤',
   FUND_STAGE_DD: '基金阶段高点回撤', FUND_HIST_MDD: '历史最大回撤比例', FUND_DAILY_VOL: '单日复权波动', FUND_DOWN_DAYS: '连续下跌交易日',
 };
-export type Rule = {id: string; code: string | null; type: RuleType; threshold: number; activation: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
+export type Rule = {id: string; name?: string; description?: string; code: string | null; type: RuleType; threshold: number; activation: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
+export function ruleName(r: Rule): string { return r.name?.trim() || RULE_NAMES[r.type] || '未命名规则'; }
+export function ruleDescription(r: Rule): string { return r.description?.trim() || ''; }
 export type RuleState = {status: 'ARMED'|'TRIGGERED'; value?: number; date?: string; evaluated?: string};
 export type Alert = {id: string; code: string; ruleId: string; date: string; title: string; value: number; threshold: number; label: string; escalation: boolean; read: boolean; seq?: number};
 export type Channel = {id: string; kind: 'bark'|'wecom'|'feishu'|'dingtalk'|'pushplus'|'serverchan'|'wechat'|'wechatOfficial'; endpoint: string; enabled: boolean; remaining?:number; cursor?:number};
@@ -25,8 +27,22 @@ export function emptyWorkspace(): Workspace {
 }
 export function defaultRules(): Rule[] {
   return [
-    ['TRAILING_STOP_NAV',5,5],['FIXED_STOP_LOSS',5,0],['FUND_HIST_MDD',90,0],['PORTFOLIO_DD',3,0],
-  ].map(([type,threshold,activation],i)=>({id:`default-${i}`,code:null,type:type as RuleType,threshold:Number(threshold),activation:Number(activation),step:2,buffer:1,window:252,basis:'pct',label:'',paused:false}));
+    {
+      id: 'default-0',
+      name: '全局默认移动止盈线',
+      description: '系统基线策略。当基金最高浮盈曾达到 5% 时开启监控，自最高点回跌达 5% 触发报警，防范利润大幅回吐。所有未单独配置专属规则的基金均默认继承此规则。',
+      code: null,
+      type: 'TRAILING_STOP_NAV',
+      threshold: 5,
+      activation: 5,
+      step: 2,
+      buffer: 1,
+      window: 252,
+      basis: 'pct',
+      label: '全局基线',
+      paused: false
+    }
+  ];
 }
 // Monotonic sequence lets each channel keep a cursor instead of remembering every alert id it has covered.
 export function addAlert(w: Workspace,alert: Omit<Alert,'seq'>){w.alertSeq=(w.alertSeq??0)+1;w.alerts.push({...alert,seq:w.alertSeq});}
