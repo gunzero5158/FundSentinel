@@ -24,3 +24,45 @@
 .input-suffix{padding:0 10px;font-size:11px;color:#6b8265;background:#f5f8f2;border-left:1px solid #e1eadc;white-space:nowrap;user-select:none;height:38px;display:flex;align-items:center}
 .input-with-affix input{border:0!important;border-radius:0!important;padding:8px 10px!important;outline:none!important;box-shadow:none!important;font-size:13px;flex:1;min-width:0}
 .form-hint{display:block;font-size:10px;color:#889a83;line-height:1.4;margin-top:4px}
+
+/* Scope indicator card in RuleForm */
+.scope-indicator-card{background:#eef5eb;border:1px solid #d3e5cd;border-radius:8px;padding:12px 14px;margin-bottom:16px}
+.scope-indicator-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.scope-indicator-badge{background:#2a6344;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px}
+.scope-indicator-desc{margin:0;font-size:11px;color:#5a7657;line-height:1.5}
+
+/* Strategies tab filter and applied funds display */
+.strategy-filter-tabs{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+.filter-pill{font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #dce5d8;background:#fff;color:#5c735a;cursor:pointer}
+.filter-pill.active{background:#2a6344;border-color:#2a6344;color:#fff;font-weight:600}
+.applied-funds-box{background:#fafcf8;border:1px solid #e7ede2;border-radius:7px;padding:10px 12px;margin:12px 0;font-size:11px}
+.applied-funds-box.specific{background:#f3f8f0;border-color:#d5e6cf}
+.applied-funds-box.portfolio{background:#f1f5fa;border-color:#d7e2ee}
+.applied-funds-title{font-weight:600;color:#395437;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.applied-fund-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.applied-tag{font-size:11px;padding:2px 8px;border-radius:4px;background:#eef4ea;border:1px solid #dce8d5;color:#355c3c}
+.applied-tag.highlight{background:#2a6344;color:#fff;border-color:#2a6344;font-weight:500}
+.overridden-note{font-size:10px;color:#a07238;margin-top:6px;line-height:1.4}
+.rule-meta-row{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:10px;border-top:1px dashed #e8eee4;font-size:11px;color:#7d9178}
+
+/* Detail drawer strategy section */
+.drawer-strategy-section{margin-top:30px;border-top:1px solid #e7eddf;padding-top:24px}
+.drawer-strategy-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.drawer-strategy-header h3{margin:0;font-size:16px;color:#234a34}
+.drawer-strategy-list{display:flex;flex-direction:column;gap:12px}
+.drawer-strategy-card{border:1px solid #e2ebd9;border-radius:8px;padding:14px 16px;background:#fff;transition:border-color .15s}
+.drawer-strategy-card.specific{border-color:#9dc596;background:#fbfdfa}
+.drawer-strategy-card.inherited{border-color:#e4ede0;background:#fcfdfa}
+.drawer-strategy-card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.rule-scope-badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px}
+.rule-scope-badge.specific{background:#e2f0dc;color:#285c35;border:1px solid #bedbb3}
+.rule-scope-badge.inherited{background:#f0f4ee;color:#6b826b;border:1px solid #d9e2d5}
+.drawer-strategy-card-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.drawer-strategy-card-title strong{font-size:14px;color:#1e3e2c}
+.drawer-strategy-threshold{font-size:14px;font-weight:600;color:#276b4a}
+.drawer-strategy-desc{font-size:11px;color:#6b8067;margin:0 0 12px;line-height:1.5}
+.drawer-strategy-card-actions{display:flex;gap:8px;border-top:1px solid #edf3e8;padding-top:10px}
+.drawer-strategy-card-actions button{font-size:11px;padding:4px 10px}
+.small-btn{padding:6px 12px;font-size:12px}
+.danger-text{color:#b94d40!important}
+.danger-text:hover{background:#fdf2f0!important;border-color:#eec4be!important}
