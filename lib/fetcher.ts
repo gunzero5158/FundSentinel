@@ -64,8 +64,14 @@ export function historicalPeak(f:Fund,mode:string,start?:string,manual?:number):
     if(!manual||!Number.isFinite(manual)||manual<latest.nav)throw new Error('历史最高净值不得低于当前净值');
     return {nav:manual,date:latest.date};
   }
+  if(mode==='date'&&start&&start<f.history[0].date)throw new Error('建仓日期早于数据源可用历史，请改用手动校准或最新净值');
   const points=mode==='today'?[latest]:mode==='date'?f.history.filter(p=>p.date>=(start??'9999')):f.history.slice(-60);
   if(!points.length)throw new Error('所选建仓日期没有可用的历史净值');
   if(mode!=='today'&&points.slice(1).some(p=>p.dividend))throw new Error('回溯区间包含分红或拆分，请选择最新净值或手动输入校准后的历史最高净值');
   return points.reduce((peak,p)=>p.nav>peak.nav?{nav:p.nav,date:p.date}:peak,{nav:points[0].nav,date:points[0].date});
+}
+
+export function manualPeak(f:Fund,basis:"nav"|"return",cost:number|undefined,nav?:number,peakReturn?:number){
+ const value=basis==="return"&&cost&&peakReturn!==undefined?cost*(1+peakReturn/100):basis==="nav"?nav:undefined;
+ return historicalPeak(f,"manual",undefined,value);
 }

@@ -6,7 +6,7 @@ export type FundStats = {reliable:boolean;stageDD:number;mdd:number;histDD:numbe
 // Full-history metrics precomputed once per NAV update, so reads need only a short tail of raw points.
 export type FundDigest = {fetchedAt:string;lastDate:string;reliable:boolean;daily:number;downDays:number;years:Record<string,{mdd:number;histDD:number;peak:number}>;stage:Record<string,number>;chart:Point[]};
 export type Fund = {code: string; name: string; type: string; source: string; history: Point[]; adjustmentReliable: boolean; fetchedAt: string; summaries?:Record<string,FundStats>; stats?:FundDigest; partial?:boolean};
-export type Position = {id: string; code: string; holding: boolean; shares: number; cost: number; hwm: number; hwmDate: string; addedAt: string; lastEvaluated?: string; needsCalibration: boolean};
+export type Position = {id: string; code: string; holding: boolean; ruleBindings?: Record<string,string>; shares: number; cost: number; hwm: number; hwmDate: string; addedAt: string; lastEvaluated?: string; needsCalibration: boolean};
 export const RULE_TYPES = ['TRAILING_STOP_NAV','TRAILING_STOP_RET','TRAILING_STOP_PROFIT','FIXED_TAKE_PROFIT','FIXED_STOP_LOSS','PORTFOLIO_DD','FUND_STAGE_DD','FUND_HIST_MDD','FUND_DAILY_VOL','FUND_DOWN_DAYS'] as const;
 export type RuleType = typeof RULE_TYPES[number];
 export const RULE_NAMES: Record<RuleType,string> = {
@@ -14,7 +14,7 @@ export const RULE_NAMES: Record<RuleType,string> = {
   FIXED_TAKE_PROFIT: '累计收益阈值', FIXED_STOP_LOSS: '累计亏损阈值', PORTFOLIO_DD: '组合高点回撤',
   FUND_STAGE_DD: '基金阶段高点回撤', FUND_HIST_MDD: '历史最大回撤比例', FUND_DAILY_VOL: '单日复权波动', FUND_DOWN_DAYS: '连续下跌交易日',
 };
-export type Rule = {id: string; name?: string; description?: string; code: string | null; type: RuleType; threshold: number; activation: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
+export type Rule = {id: string; priority?: number; name?: string; description?: string; code: string | null; type: RuleType; threshold: number; activation: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
 export function ruleName(r: Rule): string { return r.name?.trim() || RULE_NAMES[r.type] || '未命名规则'; }
 export function ruleDescription(r: Rule): string { return r.description?.trim() || ''; }
 export type RuleState = {status: 'ARMED'|'TRIGGERED'; value?: number; date?: string; evaluated?: string};
@@ -87,9 +87,23 @@ function computeMetrics(f: Fund,window: number,historyYears: number):FundStats {
   const histDD=(histPeak-cur)/histPeak*100;
   return {reliable:true,stageDD:(stagePeak-cur)/stagePeak*100,mdd,histDD,ratio:mdd>0?histDD/mdd*100:0,downDays,daily:values.length>1?(cur/values.at(-2)!-1)*100:0,peak:histPeak};
 }
+export function ruleDimension(type:RuleType):string { return type.startsWith('TRAILING_STOP_')?'TRAILING_STOP':type; }
 export function effectiveRules(w: Workspace,code: string): Rule[] {
-  const specific=w.rules.filter(r=>r.code===code), types=new Set(specific.map(r=>r.type));
-  return [...w.rules.filter(r=>r.code===null && r.type!=='PORTFOLIO_DD' && !types.has(r.type)),...specific];
+  const chosen=new Map<string,Rule>();
+  const sorted=[...w.rules].sort((a,b)=>(a.priority??0)-(b.priority??0)||a.id.localeCompare(b.id));
+  for(const scope of [null,code])for(const r of sorted)if(r.code===scope&&r.type!=='PORTFOLIO_DD')chosen.set(ruleDimension(r.type),r);
+  const bindings=w.positions.find(p=>p.code===code)?.ruleBindings??{};
+  for(const [dimension,id] of Object.entries(bindings)){const r=w.rules.find(r=>r.id===id);if(r&&r.type!=='PORTFOLIO_DD'&&ruleDimension(r.type)===dimension)chosen.set(dimension,r);}
+  return [...chosen.values()];
+}
+export function applyRule(w:Workspace,id:string,codes:string[]) {
+  const rule=w.rules.find(r=>r.id===id);if(!rule||rule.type==='PORTFOLIO_DD')throw new Error('请选择有效的基金规则');
+  if(codes.some(code=>!w.positions.some(p=>p.code===code&&p.holding)))throw new Error('应用范围包含不存在的持仓');
+  for(const p of w.positions.filter(p=>codes.includes(p.code))){
+    p.ruleBindings={...p.ruleBindings,[ruleDimension(rule.type)]:id};
+    for(const r of w.rules.filter(r=>ruleDimension(r.type)===ruleDimension(rule.type)))delete w.states[r.id+':'+p.id];
+    delete p.lastEvaluated;
+  }
 }
 export function ruleValue(r: Rule,p: Position,f: Fund): number | null {
   const m=positionMetrics(p,f);

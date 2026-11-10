@@ -86,3 +86,38 @@
 .handbook-item p{font-size:11px;color:#5a6e57;margin:0 0 6px;line-height:1.5}
 .handbook-item small{font-size:10px;color:#859682;display:block}
 @media(max-width:900px){.handbook-grid{grid-template-columns:1fr}}
+
+/* Compact rule editing and touch-friendly disclosure controls. */
+.compact-help { margin: 12px 0; border: 1px solid #dce5d3; border-radius: 8px; padding: 0 12px; }
+.compact-help > summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; color: #385536; }
+.compact-help[open] { padding-bottom: 12px; }
+.compact-help p { font-size: 13px; line-height: 1.7; }
+.rule-actions { flex-wrap: wrap; gap: 8px; }
+.rule-actions > button { min-height: 44px; }
+@media(max-width: 600px) { .modal .form-grid { grid-template-columns: 1fr; } .rule-actions > button { flex: 1; } }
+.batch-funds {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:12px 0;max-height:240px;overflow:auto;}
+.batch-funds label {display:flex;align-items:center;gap:8px;min-height:44px;}
+.batch-funds input {width:18px;height:18px;flex-shrink:0;}
+
+/* Narrow detail drawer: independent scrolling, safe-area padding and touch targets. */
+.detail-drawer {height:100dvh;overscroll-behavior:contain;}
+.detail-drawer h2,.drawer-strategy-card-title strong,.data-source {overflow-wrap:anywhere;}
+.drawer-strategy-card-title > div {min-width:0;}
+.drawer-strategy-card-top,.drawer-strategy-card-title {gap:10px;flex-wrap:wrap;}
+.drawer-strategy-threshold {flex-shrink:0;}
+@media(max-width:600px){
+ .detail-drawer {width:100%;padding:56px 16px max(24px,env(safe-area-inset-bottom));}
+ .detail-drawer .close-button {min-width:44px;min-height:44px;top:8px;right:8px;}
+ .detail-drawer button {min-height:44px;white-space:normal;}
+ .detail-buttons {display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:24px;}
+ .drawer-strategy-header {align-items:stretch;flex-direction:column;gap:12px;}
+ .drawer-strategy-card {padding:14px 12px;}
+ .drawer-strategy-card-actions button {width:100%;font-size:14px;}
+ .drawer-strategy-desc {font-size:13px;line-height:1.7;}
+ .detail-metrics {grid-template-columns:1fr;gap:14px;padding:16px 0;}
+ .detail-metrics > div {display:flex;justify-content:space-between;align-items:center;gap:12px;}
+ .detail-metrics span {margin:0;font-size:13px;}
+ .modal {max-height:100dvh;overflow:auto;}
+ .modal input,.modal select,.modal textarea {font-size:16px;min-width:0;max-width:100%;}
+ .modal-actions-row {flex-wrap:wrap;}
+}

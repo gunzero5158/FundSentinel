@@ -3,9 +3,9 @@ import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {z} from 'zod';
 import {cloud,HttpError,identify,load,save,publicWorkspace,admin} from '@/lib/store';
 import {positionSchema,ruleSchema,validateOcr} from '@/lib/validation';
-import {emptyWorkspace,evaluate,latest,VERSION} from '@/lib/domain';
+import {emptyWorkspace,evaluate,latest,VERSION,applyRule,ruleDimension} from '@/lib/domain';
 import {demoWorkspace} from '@/lib/demo';
-import {fetchFund,historicalPeak} from '@/lib/fetcher';
+import {fetchFund,historicalPeak,manualPeak} from '@/lib/fetcher';
 import {armChannel,compactOutbox,deliverPending,queueNotifications,validateEndpoint} from '@/lib/notifications';
 
 export const runtime='nodejs';
@@ -88,10 +88,14 @@ async function handle(r:NextRequest,ctx:Context){
       if(input.id&&!existing)throw new HttpError(404,'持仓不存在');
       if(w.positions.some(p=>p.code===input.code&&p.id!==input.id))throw new HttpError(409,'此基金已存在，请编辑现有记录');
       const isCodeChanged=Boolean(existing&&existing.code!==input.code);
+      if(input.peakMode==='keep'&&(!existing||isCodeChanged))throw new HttpError(400,'更换基金代码后请选择新的水位线设置');
+      if(input.ruleId&&!w.rules.some(r=>r.id===input.ruleId&&r.type!=='PORTFOLIO_DD'))throw new HttpError(400,'所选规则不存在');
       const f=await fetchFund(input.code),t=latest(f);
       let peak:{nav:number;date:string};
       if(existing&&!isCodeChanged&&input.peakMode==='keep'){
         peak={nav:existing.hwm,date:existing.hwmDate};
+      }else if(input.peakMode==='manual'){
+        peak=manualPeak(f,input.manualBasis,input.cost,input.manual,input.peakReturn);
       }else if(input.peakMode==='auto'){
         if(input.peakReturn!==undefined&&Number.isFinite(input.peakReturn)&&input.cost){
           const hwmNav=input.cost*(1+input.peakReturn/100);
@@ -108,7 +112,7 @@ async function handle(r:NextRequest,ctx:Context){
         peak=historicalPeak(f,mode,input.start,input.manual);
       }
       w.funds[input.code]=f;
-      const p={id:existing?.id??randomUUID(),code:input.code,holding:input.holding,shares:input.holding?input.shares!:0,cost:input.holding?input.cost!:0,hwm:peak.nav,hwmDate:peak.date,addedAt:existing&&!isCodeChanged?existing.addedAt:t.date,needsCalibration:false,lastEvaluated:t.date};
+      const p={id:existing?.id??randomUUID(),code:input.code,ruleBindings:existing?.ruleBindings,holding:input.holding,shares:input.holding?input.shares!:0,cost:input.holding?input.cost!:0,hwm:peak.nav,hwmDate:peak.date,addedAt:existing&&!isCodeChanged?existing.addedAt:t.date,needsCalibration:false,lastEvaluated:t.date};
       w.positions=existing?w.positions.map(old=>old.id===p.id?p:old):[...w.positions,p];
       if(isCodeChanged&&existing){
         const oldCode=existing.code;
@@ -118,19 +122,26 @@ async function handle(r:NextRequest,ctx:Context){
       }else if(input.peakMode!=='keep'||(existing&&existing.holding!==input.holding)){
         for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
       }
+      if(input.ruleId)applyRule(w,input.ruleId,[input.code]);
       delete (p as {lastEvaluated?:string}).lastEvaluated;
       evaluate(w);
+    }else if(route==='apply-rule'){
+      const input=z.object({id:z.string().max(80),codes:z.array(z.string().regex(/^\d{6}$/)).min(1).max(1000)}).parse(data);
+      applyRule(w,input.id,input.codes);evaluate(w);
     }else if(route==='rules'){
       const input=ruleSchema.parse(data),id=input.id??randomUUID();
       if(input.type==='PORTFOLIO_DD'&&input.code)throw new HttpError(400,'组合规则必须使用全局范围');
-      w.rules=[...w.rules.filter(r=>r.id!==id),{...input,id}];
+      const previous=w.rules.find(r=>r.id===id);
+      for(const p of w.positions)for(const [dimension,bound] of Object.entries(p.ruleBindings??{}))if(bound===id&&dimension!==ruleDimension(input.type)){delete p.ruleBindings![dimension];if(input.type!=='PORTFOLIO_DD')p.ruleBindings![ruleDimension(input.type)]=id;}
+      w.rules=[...w.rules.filter(r=>r.id!==id),{...input,id,priority:previous?.priority??w.revision+1}];
+      if(input.code&&(!previous||previous.code!==input.code))applyRule(w,id,[input.code]);
       for(const key of Object.keys(w.states))if(key.startsWith(`${id}:`))delete w.states[key];
       for(const p of w.positions)delete p.lastEvaluated;
       evaluate(w);
-    }else if(route==='reset-hwm'){
-      const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');
-      const t=latest(w.funds[p.code]);p.hwm=t.nav;p.hwmDate=t.date;p.addedAt=t.date;p.needsCalibration=false;
-      for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
+    }else if(route==='reset-hwm'){
+      const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');
+      const t=latest(w.funds[p.code]);p.hwm=t.nav;p.hwmDate=t.date;p.addedAt=t.date;p.needsCalibration=false;
+      for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
       p.lastEvaluated=t.date;
     }else if(route==='wechat-subscribe'){
       const c=w.channels.find(c=>c.kind==='wechat');if(!c)throw new HttpError(400,'请先通过微信登录');
@@ -144,7 +155,7 @@ async function handle(r:NextRequest,ctx:Context){
     }else if(route==='remove-channel'){
       const {id}=z.object({id:z.string()}).parse(data);w.channels=w.channels.filter(c=>c.id!==id);w.deliveries=w.deliveries.filter(d=>d.channelId!==id);
     }else if(route==='remove-rule'){
-      const {id}=z.object({id:z.string()}).parse(data);w.rules=w.rules.filter(v=>v.id!==id);
+      const {id}=z.object({id:z.string()}).parse(data);w.rules=w.rules.filter(v=>v.id!==id);for(const p of w.positions)for(const [dimension,bound] of Object.entries(p.ruleBindings??{}))if(bound===id)delete p.ruleBindings![dimension];
       for(const key of Object.keys(w.states))if(key.startsWith(`${id}:`))delete w.states[key];
     }else if(route==='archive-position'){
       const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');p.holding=false;p.shares=0;p.cost=0;

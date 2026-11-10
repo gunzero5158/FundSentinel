@@ -1,5 +1,6 @@
 'use client';
-import {useState, useEffect} from 'react';
+import {RULE_DEFAULTS} from '@/lib/rule-defaults';
+import {useState} from 'react';
 import {Rule, RuleType, RULE_TYPES, RULE_NAMES, ruleName, ruleDescription} from '@/lib/domain';
 
 export interface RuleTypeMeta {
@@ -76,10 +77,10 @@ export const RULE_META: Record<RuleType, RuleTypeMeta> = {
   },
   FUND_STAGE_DD: {
     name: '阶段窗口最高点回撤（客观）',
-    badge: '自选观察 · 阶段抗跌',
+    badge: '基金走势 · 阶段抗跌',
     defaultRuleName: '近1年阶段高点回撤监控',
     summary: '纯看基金自身净值走势（不要求个人持仓）。监控基金在近 N 个交易日内自阶段最高点的跌幅。',
-    scenario: '用于自选基金跟踪、等待回调买入机会或评估近期调整深度。',
+    scenario: '用于持仓基金跟踪、等待回调买入机会或评估近期调整深度。',
     example: '例：观察窗口 252 交易日（近1年），基金近 1 年最高净值跌落 10% 时提醒关注。',
     formula: '阶段回撤 =（窗口期最高复权净值 − 当前复权净值）÷ 窗口期最高复权净值 × 100%',
     requiresHolding: false
@@ -145,6 +146,7 @@ export default function RuleForm({
   busy: boolean;
   onSave: (r: Omit<Rule, 'id'> & {id?: string}, mode: 'replace' | 'create_new') => Promise<void>;
 }) {
+  const [saveMode,setSaveMode]=useState<'replace'|'create_new'>(rule?.id?'replace':'create_new');
   const isSingleFund = Boolean(scopeCode);
   const targetFund = isSingleFund ? funds.find(f => f.code === scopeCode) : undefined;
 
@@ -162,7 +164,7 @@ export default function RuleForm({
 
   // 独立的规则名称与规则简介状态
   const [name, setName] = useState<string>(
-    rule ? ruleName(rule) : RULE_META[type].defaultRuleName
+    rule ? (rule.id ? ruleName(rule) : (ruleName(rule).slice(0,32)+' 副本')) : RULE_META[type].defaultRuleName
   );
   const [description, setDescription] = useState<string>(
     rule ? ruleDescription(rule) : RULE_META[type].summary
@@ -171,30 +173,29 @@ export default function RuleForm({
   const [basis, setBasis] = useState(rule?.basis ?? 'pct');
   const [globalCodeChoice, setGlobalCodeChoice] = useState<string>(rule?.code ?? '');
 
-  // 替换目标规则选择（支持把当前修改替换进已有规则）
-  const [replaceTargetId, setReplaceTargetId] = useState<string>(rule?.id ?? '');
 
   const trailing = type.startsWith('TRAILING_'),
     fixed = type.startsWith('FIXED_'),
     unit = ruleUnit(type, basis),
     days = type === 'FUND_DOWN_DAYS';
-  const initial = rule?.type === type ? rule : undefined;
+  const initial = rule?.type === type && rule.basis === basis ? rule : undefined;
   const currentMeta = RULE_META[type];
+  const defaults = RULE_DEFAULTS[type];
 
   // 当切换规则类型时，如果是新建或者用户未特别定制名字，智能建议默认名称和简介
   const handleTypeChange = (newType: RuleType) => {
     setType(newType);
     setBasis('pct');
-    if (!rule) {
+    if (!rule && name === RULE_META[type].defaultRuleName) {
       setName(RULE_META[newType].defaultRuleName);
       setDescription(RULE_META[newType].summary);
     }
   };
 
   const isEditingOwnSpecificRule = isSingleFund && Boolean(rule?.id && rule.code === scopeCode);
-  const isCustomizingFromGlobal = isSingleFund && Boolean(rule?.id && rule.code === null);
+  const isCustomizingFromGlobal = isSingleFund && Boolean(rule?.id && rule.code !== scopeCode);
 
-  const getFormData = (form: HTMLFormElement, mode: 'replace' | 'create_new', targetId?: string) => {
+  const getFormData = (form: HTMLFormElement, mode: 'replace' | 'create_new') => {
     const d = new FormData(form);
     const assignedCode: string | null = isSingleFund
       ? (scopeCode ?? null)
@@ -208,14 +209,14 @@ export default function RuleForm({
         // 自定义全局规则为单基金专属时，不污染原全局规则 ID，而是新建专属规则
         effectiveId = undefined;
       } else {
-        effectiveId = targetId || replaceTargetId || rule?.id || undefined;
+        effectiveId = rule?.id || undefined;
       }
     }
 
     return {
       id: effectiveId,
       name: name.trim() || RULE_META[type].defaultRuleName,
-      description: description.trim() || currentMeta.summary,
+      description: description.trim(),
       type,
       code: assignedCode,
       threshold: Number(d.get('threshold')),
@@ -225,15 +226,11 @@ export default function RuleForm({
       window: type === 'FUND_STAGE_DD' ? Number(d.get('window')) : 252,
       historyYears: type === 'FUND_HIST_MDD' ? (Number(d.get('historyYears')) as 0 | 3 | 5) : 0,
       basis: fixed ? basis : 'pct',
-      label: String(d.get('label') || ''),
-      paused: rule?.paused ?? false
+      label: rule?.label ?? '',
+      paused: mode==='create_new'?false:rule?.paused ?? false
     };
   };
 
-  // 可供替换的目标候选规则列表（根据上下文筛选）
-  const replaceableRules = isSingleFund
-    ? existingRules.filter(r => r.code === scopeCode)
-    : existingRules;
 
   return (
     <>
@@ -241,41 +238,30 @@ export default function RuleForm({
       <h2>
         {isSingleFund
           ? (rule ? `调整「${targetFund?.name ?? scopeCode}」策略` : `为「${targetFund?.name ?? scopeCode}」配置专属策略`)
-          : (rule ? '修改监控规则 / 替换现有规则' : '创建新监控规则')}
+          : (rule?.id ? '编辑规则' : '创建新规则')}
       </h2>
       <p>
         {isSingleFund
           ? (isEditingOwnSpecificRule
               ? '当前正在修改此基金的专属规则。保存后将仅替换该基金的专属参数，完全不影响其他基金。'
               : isCustomizingFromGlobal
-                ? '当前参考的是全局默认规则。保存后将为该基金生成独立的专属覆盖规则，原本全局规则保持不变。'
+                ? '当前参考的是全局默认规则。保存后将为该基金生成独立的专属覆盖规则，原规则保持不变。'
                 : '将为此基金创建专属规则。专属规则会优先于同类型的全局默认规则生效。')
           : (rule
               ? (rule.code ? `当前编辑的是专属规则（标的：${funds.find(f => f.code === rule.code)?.name ?? rule.code}）。` : '当前编辑的是全局默认规则。修改后将对所有继承该规则的基金统一生效。')
-              : '可自由命名规则、编写适用简介，并选择底层模型和阈值参数。')}
+              : '选择应用范围与预警条件。')}
       </p>
-
-      {/* 规则工作全流程逻辑导读卡片 */}
-      <div className="strategy-guide-box">
-        <strong>💡 策略工作全流程逻辑（通俗大白话）：</strong>
-        <p>
-          ① <b>开启门槛</b>：基金浮盈曾达到门槛后哨兵才正式上线（未赚钱不打扰）；<br/>
-          ② <b>回撤预警</b>：从高位回跌达到阈值触发首次报警；<br/>
-          ③ <b>防骚扰追报</b>：跌势加深时每多跌一个步长才升级提醒；<br/>
-          ④ <b>反弹解除</b>：回撤收窄至（阈值 − 缓冲）以下自动复位重新警戒。
-        </p>
-      </div>
 
       <form
         onSubmit={async e => {
           e.preventDefault();
-          const r = getFormData(e.currentTarget, 'replace');
-          await onSave(r, 'replace');
+          const r = getFormData(e.currentTarget, saveMode);
+          await onSave(r, saveMode);
         }}
       >
         {/* 1. 规则名称与规则类型彻底独立 */}
         <label>
-          规则名称（可自定义）
+          {saveMode==='create_new'?'新规则名称':'规则名称'}
           <input
             name="name"
             value={name}
@@ -284,11 +270,10 @@ export default function RuleForm({
             maxLength={35}
             required
           />
-          <small className="form-hint">给策略起一个便于记忆的名字，区分不同标的或不同行情下的风控意图</small>
         </label>
 
         <label>
-          规则简介与适用说明（可自定义）
+          备注（选填）
           <textarea
             name="description"
             value={description}
@@ -305,34 +290,26 @@ export default function RuleForm({
               color: '#385536'
             }}
           />
-          <small className="form-hint">写下这个规则的特点与适用情况，方便日后随时查看与复盘</small>
         </label>
 
         {/* 2. 底层规则模型选择 */}
         <label>
-          底层计算模型
+          规则类型
           <select value={type} onChange={e => handleTypeChange(e.target.value as RuleType)}>
             {availableTypes.map(t => (
               <option key={t} value={t}>
-                {RULE_NAMES[t]} · {RULE_META[t].badge}
+                {RULE_NAMES[t]}
               </option>
             ))}
           </select>
         </label>
 
-        {/* 选中的具体规则的详尽解释卡片 */}
-        <div className="rule-detail-explainer-card">
-          <div className="rule-explainer-header">
-            <span className="rule-explainer-badge">{currentMeta.badge}</span>
-            <strong>{currentMeta.name}</strong>
-          </div>
-          <p className="rule-explainer-summary">📌 <b>模型定义</b>：{currentMeta.summary}</p>
-          <p className="rule-explainer-scenario">🎯 <b>适用场景</b>：{currentMeta.scenario}</p>
-          <p className="rule-explainer-example">🌰 <b>通俗举例</b>：{currentMeta.example}</p>
-          <div className="rule-explainer-formula">
-            <small>📐 <b>计算原理</b>：{currentMeta.formula}</small>
-          </div>
-        </div>
+        <details className="compact-help" key={type}><summary>指标说明</summary>
+          <strong>{RULE_NAMES[type]}</strong><p>{currentMeta.summary}</p><p>{currentMeta.formula}</p><p>{currentMeta.example}</p>
+          <p>预填值仅为配置起点，未针对你的基金回测；债券与权益基金请分别设置。金额模式需自行填写阈值、步长及缓冲。</p><strong>触发与解除</strong>
+          {trailing&&<p>最高浮盈达到开启门槛后才监控，且最高净值须高于成本。</p>}
+          <p>指标达到阈值时首次预警；此后每增加一个步长追加提醒；严格低于「阈值 − 缓冲」时复位。</p>
+        </details>
 
         {/* 3. 应用范围 */}
         {isSingleFund ? (
@@ -386,15 +363,15 @@ export default function RuleForm({
         {/* 4. 具体参数输入 */}
         <div className="form-grid" key={type + basis}>
           <label>
-            回撤预警触发阈值
+            预警触发阈值
             <div className="input-with-affix">
-              <span className="input-prefix">从最高点回跌 ≥</span>
+              <span className="input-prefix">指标 ≥</span>
               <input
                 name="threshold"
                 type="number"
                 min={days ? 1 : 0.01}
                 step={days ? 1 : 'any'}
-                defaultValue={initial?.threshold ?? (type === 'FUND_HIST_MDD' ? 90 : days ? 3 : 5)}
+                defaultValue={initial?.threshold ?? (basis==='amount'?undefined:defaults.threshold)}
                 required
               />
               <span className="input-suffix">{unit}</span>
@@ -404,7 +381,7 @@ export default function RuleForm({
                 ? '连续下跌达到该交易日天数时触发预警'
                 : type === 'FUND_HIST_MDD'
                   ? '达到历史最大回撤该比例时触发预警（如 90 表示九成历史最大跌幅）'
-                  : '自最高点回跌达到此数值时触发首次预警'}
+                  : fixed ? '累计收益或亏损达到阈值时预警' : type==='FUND_DAILY_VOL' ? '单日涨跌幅绝对值达到阈值时预警' : '所选指标达到阈值时预警'}
             </small>
           </label>
 
@@ -418,7 +395,7 @@ export default function RuleForm({
                   type="number"
                   min="0"
                   step="any"
-                  defaultValue={initial?.activation ?? 5}
+                  defaultValue={initial?.activation ?? defaults.activation}
                   required
                 />
                 <span className="input-suffix">%</span>
@@ -430,35 +407,35 @@ export default function RuleForm({
           <label>
             加深升级提醒步长
             <div className="input-with-affix">
-              <span className="input-prefix">恶化每多跌 ≥</span>
+              <span className="input-prefix">指标每增加 ≥</span>
               <input
                 name="step"
                 type="number"
                 min={days ? 1 : 0.01}
                 step={days ? 1 : 'any'}
-                defaultValue={initial?.step ?? (days ? 1 : 2)}
+                defaultValue={initial?.step ?? (basis==='amount'?undefined:defaults.step)}
                 required
               />
               <span className="input-suffix">{unit}</span>
             </div>
-            <small className="form-hint">首次报警后，每进一步深跌该幅度才追加提醒，区间震荡不骚扰</small>
+            <small className="form-hint">首次预警后，指标每增加该数值追加提醒</small>
           </label>
 
           <label>
             防反复横跳复位缓冲
             <div className="input-with-affix">
-              <span className="input-prefix">反弹收复缓冲</span>
+              <span className="input-prefix">复位缓冲</span>
               <input
                 name="buffer"
                 type="number"
                 min="0"
                 step={days ? 1 : 'any'}
-                defaultValue={initial?.buffer ?? (days ? 0 : 1)}
+                defaultValue={initial?.buffer ?? (basis==='amount'?undefined:defaults.buffer)}
                 required
               />
               <span className="input-suffix">{unit}</span>
             </div>
-            <small className="form-hint">反弹收窄至「阈值 − 缓冲」以下时才解除警报复位；缓冲须小于阈值</small>
+            <small className="form-hint">指标降至「阈值 − 缓冲」以下时才解除警报复位；缓冲须小于阈值</small>
           </label>
 
           {type === 'FUND_STAGE_DD' && (
@@ -476,7 +453,7 @@ export default function RuleForm({
                 />
                 <span className="input-suffix">个交易日</span>
               </div>
-              <small className="form-hint">股市一年约 252 个交易日；填 0 为自加入自选日起</small>
+              <small className="form-hint">股市一年约 252 个交易日；填 0 为自加入持仓日起</small>
             </label>
           )}
 
@@ -493,75 +470,8 @@ export default function RuleForm({
           )}
         </div>
 
-        {/* 5. 替换已有规则选择器（当系统有可替换规则时展示） */}
-        {replaceableRules.length > 0 && (
-          <div style={{background: '#fafcf9', border: '1px solid #e2ebd8', borderRadius: '7px', padding: '12px', margin: '10px 0'}}>
-            <label style={{fontSize: '12px', fontWeight: 600, color: '#315438'}}>
-              🔄 替换已有规则（若勾选替换目标，将用当前配置覆写替换该规则）
-              <select
-                value={replaceTargetId}
-                onChange={e => setReplaceTargetId(e.target.value)}
-                style={{marginTop: '6px'}}
-              >
-                <option value="">-- 不替换已有规则（另存为全新规则） --</option>
-                {replaceableRules.map(r => (
-                  <option key={r.id} value={r.id}>
-                    替换现有：{ruleName(r)}（{RULE_NAMES[r.type]} · {r.code ? '专属' : '全局'}）
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        )}
-
-        <label>
-          备忘便签标签（最多 15 字）
-          <input
-            name="label"
-            maxLength={15}
-            defaultValue={rule?.label}
-            placeholder="例如：牛市锁利 / 熊市防守"
-          />
-        </label>
-
-        {/* 6. 双通道操作按钮：新建 vs 替换 */}
-        <div className="modal-actions-row">
-          {/* 替换按钮 */}
-          {(rule || replaceTargetId) && (
-            <button
-              type="submit"
-              className="primary flex-1"
-              disabled={busy}
-              title="保存并替换指定规则"
-            >
-              {isSingleFund
-                ? (isEditingOwnSpecificRule
-                    ? '保存并替换专属规则'
-                    : '覆盖为此基金专属规则')
-                : '保存并替换目标规则'}
-            </button>
-          )}
-
-          {/* 新建/另存为按钮 */}
-          <button
-            type="button"
-            className={rule || replaceTargetId ? 'secondary' : 'primary flex-1'}
-            disabled={busy}
-            onClick={async e => {
-              const form = e.currentTarget.form;
-              if (!form) return;
-              if (!form.checkValidity()) {
-                form.reportValidity();
-                return;
-              }
-              const r = getFormData(form, 'create_new');
-              await onSave(r, 'create_new');
-            }}
-            title="将当前配置另存为一条新的独立监控规则"
-          >
-            {isSingleFund ? '➕ 另存为此基金新规则' : '➕ 保存为全新规则'}
-          </button>
-        </div>
+        {Boolean(rule?.id)&&<label>保存方式<select value={saveMode} onChange={e=>{const mode=e.target.value as 'replace'|'create_new';setSaveMode(mode);if(mode==='create_new'&&name===ruleName(rule!))setName(name.slice(0,32)+' 副本');}}><option value="replace">{isCustomizingFromGlobal?'保存为单基金专属':'修改当前规则'}</option><option value="create_new">另存为新规则</option></select></label>}
+        <button type="submit" className="primary full" disabled={busy}>{busy?'保存中…':saveMode==='create_new'?'创建新规则':'保存修改'}</button>
       </form>
     </>
   );
