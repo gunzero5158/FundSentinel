@@ -45,7 +45,8 @@ export function defaultRules(): Rule[] {
   ];
 }
 // Monotonic sequence lets each channel keep a cursor instead of remembering every alert id it has covered.
-export function addAlert(w: Workspace,alert: Omit<Alert,'seq'>){w.alertSeq=(w.alertSeq??0)+1;w.alerts.push({...alert,seq:w.alertSeq});}
+// One alert per rule, target and NAV date: re-evaluating after an edit must not repeat it.
+export function addAlert(w: Workspace,alert: Omit<Alert,'seq'>){if(w.alerts.some(a=>a.id===alert.id))return;w.alertSeq=(w.alertSeq??0)+1;w.alerts.push({...alert,seq:w.alertSeq});}
 export function latest(f: Fund): Point { if(!f.history.length) throw new Error('基金缺少有效净值'); return f.history[f.history.length-1]; }
 export function positionMetrics(p: Position,f: Fund) {
   const t=latest(f), prev=f.history.at(-2), hwm=Math.max(p.hwm,t.nav), ret=p.cost>0?(t.nav/p.cost-1)*100:0;
@@ -102,7 +103,6 @@ export function applyRule(w:Workspace,id:string,codes:string[]) {
   for(const p of w.positions.filter(p=>codes.includes(p.code))){
     p.ruleBindings={...p.ruleBindings,[ruleDimension(rule.type)]:id};
     for(const r of w.rules.filter(r=>ruleDimension(r.type)===ruleDimension(rule.type)))delete w.states[r.id+':'+p.id];
-    delete p.lastEvaluated;
   }
 }
 export function ruleValue(r: Rule,p: Position,f: Fund): number | null {
@@ -134,12 +134,15 @@ export function transition(s: RuleState | undefined,r: Rule,value: number,date: 
     return {state:{status:'TRIGGERED',value,date,evaluated:date},notify:true,escalation};
   return {state:next,notify:false,escalation:false};
 }
-export function evaluate(w: Workspace): Workspace {
+// Corporate actions the position has not been evaluated past; lastEvaluated is the cursor and must survive re-evaluation.
+export const pendingActions=(p: Position,f: Fund)=>f.history.filter(x=>x.dividend && x.date>(p.lastEvaluated??'') && x.date>=p.addedAt);
+// force re-runs the current NAV date after a rule or position change; rule states keep it idempotent.
+export function evaluate(w: Workspace,force=false): Workspace {
   for(const p of w.positions){
     const f=w.funds[p.code];if(!f)continue;
-    const t=latest(f);if(p.lastEvaluated && p.lastEvaluated>=t.date)continue;
+    const t=latest(f);if(!force && p.lastEvaluated && p.lastEvaluated>=t.date)continue;
     // Any missed corporate action since the previous evaluation invalidates the personal cost basis.
-    const actions=f.history.filter(x=>x.dividend && x.date>(p.lastEvaluated??t.date.slice(0,0)) && x.date>=p.addedAt);
+    const actions=pendingActions(p,f);
     if(p.holding && actions.length){
       p.needsCalibration=true;
       for(const a of actions){const id=`corporate:${p.id}:${a.date}`;if(!w.alerts.some(x=>x.id===id))addAlert(w,{id,code:p.code,ruleId:'corporate',date:a.date,title:'分红除权校准提醒：请确认份额与成本',value:0,threshold:0,label:a.dividend,escalation:false,read:false});}

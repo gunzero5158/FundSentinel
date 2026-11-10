@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyWorkspace,evaluate,positionMetrics,fundMetrics,ruleValue,transition,Rule,Fund,Position,effectiveRules} from '../lib/domain';
+import {emptyWorkspace,evaluate,positionMetrics,fundMetrics,ruleValue,transition,Rule,Fund,Position,effectiveRules,applyRule,pendingActions} from '../lib/domain';
 import {parseEastmoney,historicalPeak,extractAssignment} from '../lib/fetcher';
 import {positionSchema,validateOcr} from '../lib/validation';
 import {validateEndpoint} from '../lib/notifications';
@@ -67,3 +67,13 @@ test('objective history can use 3-year / 5-year baseline or stage since observat
 test('historical personal watermarks never silently cross an uncalibrated ex-dividend event',()=>{const f=fund();f.history[1].dividend='每份分红';assert.throws(()=>historicalPeak(f,'60'),/分红或拆分/);near(historicalPeak(f,'today').nav,1.14);});
 test('holding validation accepts keep mode for updating positions and preserves existing inputs',()=>{assert.ok(positionSchema.safeParse({id:'p1',code:'000001',holding:true,shares:5000,cost:1.2,peakMode:'keep'}).success);assert.ok(positionSchema.safeParse({id:'p1',code:'000002',holding:false,peakMode:'keep'}).success);});
 test('holding validation accepts auto, cost mode and current return inputs',()=>{assert.ok(positionSchema.safeParse({code:'000001',holding:true,shares:1000,cost:1.0,peakMode:'auto',currentReturn:13.07,peakReturn:25}).success);assert.ok(positionSchema.safeParse({code:'000001',holding:true,shares:1000,cost:1.0,peakMode:'cost'}).success);});
+test('rule changes re-evaluate the same NAV date without re-flagging an acknowledged dividend',()=>{
+  const w=emptyWorkspace(),f=fund([1,1.2,1.1,1.11]);f.history[2].dividend='分红';w.funds={'000001':f};w.positions=[{...position(),hwm:1.11,lastEvaluated:'2026-10-13'}];w.rules=[{...rule('FIXED_TAKE_PROFIT',10),id:'tp'}];
+  applyRule(w,'tp',['000001']);evaluate(w,true);
+  assert.equal(w.positions[0].needsCalibration,false);assert.ok(!w.alerts.some(a=>a.ruleId==='corporate'));assert.equal(w.states['tp:p'].status,'TRIGGERED');
+});
+test('a rule re-armed by an edit does not duplicate the alert of the same NAV date',()=>{
+  const w=emptyWorkspace();w.funds={'000001':fund()};w.positions=[position()];w.rules=[rule()];evaluate(w);assert.equal(w.alerts.length,1);
+  delete w.states['r:p'];evaluate(w,true);assert.equal(w.alerts.length,1);assert.equal(w.states['r:p'].status,'TRIGGERED');
+});
+test('dividends stay pending until the position is evaluated past them',()=>{const f=fund([1,1.2,1.1,1.11]);f.history[2].dividend='分红';assert.equal(pendingActions({...position(),lastEvaluated:'2026-10-11'},f).length,1);assert.equal(pendingActions({...position(),lastEvaluated:'2026-10-13'},f).length,0);});

@@ -3,7 +3,7 @@ import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {z} from 'zod';
 import {cloud,HttpError,identify,load,save,publicWorkspace,admin} from '@/lib/store';
 import {positionSchema,ruleSchema,validateOcr} from '@/lib/validation';
-import {emptyWorkspace,evaluate,latest,VERSION,applyRule,ruleDimension} from '@/lib/domain';
+import {emptyWorkspace,evaluate,latest,VERSION,applyRule,ruleDimension,pendingActions} from '@/lib/domain';
 import {demoWorkspace} from '@/lib/demo';
 import {fetchFund,historicalPeak,manualPeak} from '@/lib/fetcher';
 import {armChannel,compactOutbox,deliverPending,queueNotifications,validateEndpoint} from '@/lib/notifications';
@@ -91,6 +91,8 @@ async function handle(r:NextRequest,ctx:Context){
       if(input.peakMode==='keep'&&(!existing||isCodeChanged))throw new HttpError(400,'更换基金代码后请选择新的水位线设置');
       if(input.ruleId&&!w.rules.some(r=>r.id===input.ruleId&&r.type!=='PORTFOLIO_DD'))throw new HttpError(400,'所选规则不存在');
       const f=await fetchFund(input.code),t=latest(f);
+      // The kept watermark predates the ex-date NAV drop and would read as a drawdown.
+      if(input.peakMode==='keep'&&existing&&(existing.needsCalibration||pendingActions(existing,f).length))throw new HttpError(400,'分红或拆分后原水位线已失效，请选择新的水位线设置');
       let peak:{nav:number;date:string};
       if(existing&&!isCodeChanged&&input.peakMode==='keep'){
         peak={nav:existing.hwm,date:existing.hwmDate};
@@ -123,11 +125,10 @@ async function handle(r:NextRequest,ctx:Context){
         for(const key of Object.keys(w.states))if(key.endsWith(`:${p.id}`))delete w.states[key];
       }
       if(input.ruleId)applyRule(w,input.ruleId,[input.code]);
-      delete (p as {lastEvaluated?:string}).lastEvaluated;
-      evaluate(w);
+      evaluate(w,true);
     }else if(route==='apply-rule'){
       const input=z.object({id:z.string().max(80),codes:z.array(z.string().regex(/^\d{6}$/)).min(1).max(1000)}).parse(data);
-      applyRule(w,input.id,input.codes);evaluate(w);
+      applyRule(w,input.id,input.codes);evaluate(w,true);
     }else if(route==='rules'){
       const input=ruleSchema.parse(data),id=input.id??randomUUID();
       if(input.type==='PORTFOLIO_DD'&&input.code)throw new HttpError(400,'组合规则必须使用全局范围');
@@ -136,8 +137,7 @@ async function handle(r:NextRequest,ctx:Context){
       w.rules=[...w.rules.filter(r=>r.id!==id),{...input,id,priority:previous?.priority??w.revision+1}];
       if(input.code&&(!previous||previous.code!==input.code))applyRule(w,id,[input.code]);
       for(const key of Object.keys(w.states))if(key.startsWith(`${id}:`))delete w.states[key];
-      for(const p of w.positions)delete p.lastEvaluated;
-      evaluate(w);
+      evaluate(w,true);
     }else if(route==='reset-hwm'){
       const {id}=z.object({id:z.string()}).parse(data),p=w.positions.find(p=>p.id===id);if(!p)throw new HttpError(404,'持仓不存在');
       const t=latest(w.funds[p.code]);p.hwm=t.nav;p.hwmDate=t.date;p.addedAt=t.date;p.needsCalibration=false;
