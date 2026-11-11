@@ -77,3 +77,14 @@ test('a rule re-armed by an edit does not duplicate the alert of the same NAV da
   delete w.states['r:p'];evaluate(w,true);assert.equal(w.alerts.length,1);assert.equal(w.states['r:p'].status,'TRIGGERED');
 });
 test('dividends stay pending until the position is evaluated past them',()=>{const f=fund([1,1.2,1.1,1.11]);f.history[2].dividend='分红';assert.equal(pendingActions({...position(),lastEvaluated:'2026-10-11'},f).length,1);assert.equal(pendingActions({...position(),lastEvaluated:'2026-10-13'},f).length,0);});
+test('trailing rules carry a principal stop-loss that alerts a position which only ever fell',()=>{
+  const build=(rules:Rule[])=>{const w=emptyWorkspace();w.rules=rules;w.funds={'000001':fund([1,.95,.91])};w.positions=[{...position(),hwm:1}];return evaluate(w);};
+  let w=build([rule()]);assert.equal(w.alerts.length,1);assert.equal(w.alerts[0].title,'本金止损线');near(w.alerts[0].value,9);assert.equal(w.alerts[0].threshold,8);
+  assert.equal(build([{...rule(),stopLoss:0}]).alerts.length,0);assert.equal(build([{...rule(),stopLoss:10}]).alerts.length,0);
+  w=build([rule(),{...rule('FIXED_STOP_LOSS'),id:'loss'}]);assert.deepEqual(w.alerts.map(a=>a.ruleId),['loss']);
+});
+test('daily volatility alerts on each day past the threshold instead of waiting for a larger move',()=>{
+  const r={...rule('FUND_DAILY_VOL',3),step:1,buffer:.5};let result=transition(undefined,r,3.5,'2026-10-10');assert.ok(result.notify);
+  result=transition(result.state,r,3.2,'2026-10-11');assert.ok(result.notify&&!result.escalation);
+  result=transition(result.state,r,2.9,'2026-10-12');assert.equal(result.notify,false);assert.equal(transition(result.state,r,3.2,'2026-10-12').notify,false);
+});

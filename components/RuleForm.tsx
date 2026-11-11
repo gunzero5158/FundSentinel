@@ -1,7 +1,7 @@
 'use client';
 import {RULE_DEFAULTS} from '@/lib/rule-defaults';
 import {useState} from 'react';
-import {Rule, RuleType, RULE_TYPES, RULE_NAMES, ruleName, ruleDescription} from '@/lib/domain';
+import {Rule, RuleType, RULE_TYPES, RULE_NAMES, ruleName, ruleDescription, stopLossOf, DEFAULT_STOP_LOSS} from '@/lib/domain';
 
 export interface RuleTypeMeta {
   name: string;
@@ -177,7 +177,8 @@ export default function RuleForm({
   const trailing = type.startsWith('TRAILING_'),
     fixed = type.startsWith('FIXED_'),
     unit = ruleUnit(type, basis),
-    days = type === 'FUND_DOWN_DAYS';
+    days = type === 'FUND_DOWN_DAYS',
+    daily = type === 'FUND_DAILY_VOL';
   const initial = rule?.type === type && rule.basis === basis ? rule : undefined;
   const currentMeta = RULE_META[type];
   const defaults = RULE_DEFAULTS[type];
@@ -220,9 +221,10 @@ export default function RuleForm({
       type,
       code: assignedCode,
       threshold: Number(d.get('threshold')),
-      step: Number(d.get('step')),
-      buffer: Number(d.get('buffer')),
+      step: daily ? defaults.step : Number(d.get('step')),
+      buffer: daily ? defaults.buffer : Number(d.get('buffer')),
       activation: trailing ? Number(d.get('activation')) : 0,
+      stopLoss: trailing ? Number(d.get('stopLoss')) : undefined,
       window: type === 'FUND_STAGE_DD' ? Number(d.get('window')) : 252,
       historyYears: type === 'FUND_HIST_MDD' ? (Number(d.get('historyYears')) as 0 | 3 | 5) : 0,
       basis: fixed ? basis : 'pct',
@@ -307,8 +309,8 @@ export default function RuleForm({
         <details className="compact-help" key={type}><summary>指标说明</summary>
           <strong>{RULE_NAMES[type]}</strong><p>{currentMeta.summary}</p><p>{currentMeta.formula}</p><p>{currentMeta.example}</p>
           <p>预填值仅为配置起点，未针对你的基金回测；债券与权益基金请分别设置。金额模式需自行填写阈值、步长及缓冲。</p><strong>触发与解除</strong>
-          {trailing&&<p>最高浮盈达到开启门槛后才监控，且最高净值须高于成本。</p>}
-          <p>指标达到阈值时首次预警；此后每增加一个步长追加提醒；严格低于「阈值 − 缓冲」时复位。</p>
+          {trailing&&<p>最高浮盈达到开启门槛后才监控，且最高净值须高于成本。开启前若一路下跌，由「本金止损线」兜底：持仓亏损达到该比例即提醒；基金已另有「累计亏损阈值」规则时以那条规则为准。</p>}
+          {daily?<p>每个净值日独立判断：当日涨跌幅绝对值达到阈值就提醒，连续多日大涨大跌会逐日提醒。</p>:<p>指标达到阈值时首次预警；此后每增加一个步长追加提醒；严格低于「阈值 − 缓冲」时复位。</p>}
         </details>
 
         {/* 3. 应用范围 */}
@@ -404,7 +406,27 @@ export default function RuleForm({
             </label>
           )}
 
-          <label>
+          {trailing && (
+            <label>
+              本金止损线
+              <div className="input-with-affix">
+                <span className="input-prefix">持仓亏损 ≥</span>
+                <input
+                  name="stopLoss"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="any"
+                  defaultValue={rule ? stopLossOf({...rule, type}) : DEFAULT_STOP_LOSS}
+                  required
+                />
+                <span className="input-suffix">%</span>
+              </div>
+              <small className="form-hint">买入后一路下跌、移动止盈尚未开启时的兜底提醒；填 0 关闭</small>
+            </label>
+          )}
+
+          {!daily && <label>
             加深升级提醒步长
             <div className="input-with-affix">
               <span className="input-prefix">指标每增加 ≥</span>
@@ -419,9 +441,9 @@ export default function RuleForm({
               <span className="input-suffix">{unit}</span>
             </div>
             <small className="form-hint">首次预警后，指标每增加该数值追加提醒</small>
-          </label>
+          </label>}
 
-          <label>
+          {!daily && <label>
             防反复横跳复位缓冲
             <div className="input-with-affix">
               <span className="input-prefix">复位缓冲</span>
@@ -436,7 +458,7 @@ export default function RuleForm({
               <span className="input-suffix">{unit}</span>
             </div>
             <small className="form-hint">指标降至「阈值 − 缓冲」以下时才解除警报复位；缓冲须小于阈值</small>
-          </label>
+          </label>}
 
           {type === 'FUND_STAGE_DD' && (
             <label>

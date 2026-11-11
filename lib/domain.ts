@@ -1,4 +1,5 @@
 import packageMetadata from '../package.json';
+import {RULE_DEFAULTS} from './rule-defaults';
 export const VERSION = packageMetadata.version;
 export const DISCLAIMER = '本工具仅基于公开历史净值及用户自行录入的数据提供客观指标计算与阈值通知，不构成任何投资建议。';
 export type Point = {date: string; nav: number; acc: number; adj: number | null; daily: number | null; dividend: string};
@@ -14,9 +15,14 @@ export const RULE_NAMES: Record<RuleType,string> = {
   FIXED_TAKE_PROFIT: '累计收益阈值', FIXED_STOP_LOSS: '累计亏损阈值', PORTFOLIO_DD: '组合高点回撤',
   FUND_STAGE_DD: '基金阶段高点回撤', FUND_HIST_MDD: '历史最大回撤比例', FUND_DAILY_VOL: '单日复权波动', FUND_DOWN_DAYS: '连续下跌交易日',
 };
-export type Rule = {id: string; priority?: number; name?: string; description?: string; code: string | null; type: RuleType; threshold: number; activation: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
+export type Rule = {id: string; priority?: number; name?: string; description?: string; code: string | null; type: RuleType; threshold: number; activation: number; stopLoss?: number; step: number; buffer: number; window: number; historyYears?:0|3|5; basis: 'pct'|'amount'; label: string; paused: boolean};
 export function ruleName(r: Rule): string { return r.name?.trim() || RULE_NAMES[r.type] || '未命名规则'; }
 export function ruleDescription(r: Rule): string { return r.description?.trim() || ''; }
+// A trailing stop stays silent until its activation gain, so a position that only ever falls needs a floor on loss from cost.
+// Rules saved before the parameter existed get the default; 0 turns it off.
+export const DEFAULT_STOP_LOSS = 8;
+export const STOP_LOSS_TITLE = '本金止损线';
+export function stopLossOf(r: Rule): number { return r.type.startsWith('TRAILING_STOP_') ? r.stopLoss ?? DEFAULT_STOP_LOSS : 0; }
 export type RuleState = {status: 'ARMED'|'TRIGGERED'; value?: number; date?: string; evaluated?: string};
 export type Alert = {id: string; code: string; ruleId: string; date: string; title: string; value: number; threshold: number; label: string; escalation: boolean; read: boolean; seq?: number};
 export type Channel = {id: string; kind: 'bark'|'wecom'|'feishu'|'dingtalk'|'pushplus'|'serverchan'|'wechat'|'wechatOfficial'; endpoint: string; enabled: boolean; remaining?:number; cursor?:number};
@@ -30,11 +36,12 @@ export function defaultRules(): Rule[] {
     {
       id: 'default-0',
       name: '全局默认移动止盈线',
-      description: '系统基线策略。当基金最高浮盈曾达到 5% 时开启监控，自最高点回跌达 5% 触发报警，防范利润大幅回吐。所有未单独配置专属规则的基金均默认继承此规则。',
+      description: '系统基线策略。当基金最高浮盈曾达到 5% 时开启监控，自最高点回跌达 5% 触发报警，防范利润大幅回吐；持仓亏损达到 8% 时另发本金止损提醒。所有未单独配置专属规则的基金均默认继承此规则。',
       code: null,
       type: 'TRAILING_STOP_NAV',
       threshold: 5,
       activation: 5,
+      stopLoss: DEFAULT_STOP_LOSS,
       step: 2,
       buffer: 1,
       window: 252,
@@ -102,7 +109,7 @@ export function applyRule(w:Workspace,id:string,codes:string[]) {
   if(codes.some(code=>!w.positions.some(p=>p.code===code&&p.holding)))throw new Error('应用范围包含不存在的持仓');
   for(const p of w.positions.filter(p=>codes.includes(p.code))){
     p.ruleBindings={...p.ruleBindings,[ruleDimension(rule.type)]:id};
-    for(const r of w.rules.filter(r=>ruleDimension(r.type)===ruleDimension(rule.type)))delete w.states[r.id+':'+p.id];
+    for(const r of w.rules.filter(r=>ruleDimension(r.type)===ruleDimension(rule.type))){delete w.states[r.id+':'+p.id];delete w.states[r.id+':stop:'+p.id];}
   }
 }
 export function ruleValue(r: Rule,p: Position,f: Fund): number | null {
@@ -127,6 +134,8 @@ export function ruleValue(r: Rule,p: Position,f: Fund): number | null {
 export function transition(s: RuleState | undefined,r: Rule,value: number,date: string): {state:RuleState;notify:boolean;escalation:boolean} {
   const old=s??{status:'ARMED'};
   if(r.paused || (old.evaluated && date<=old.evaluated))return {state:old,notify:false,escalation:false};
+  // A daily move is an event, not a level: each day past the threshold alerts on its own.
+  if(r.type==='FUND_DAILY_VOL')return value+1e-9>=r.threshold?{state:{status:'TRIGGERED',value,date,evaluated:date},notify:true,escalation:false}:{state:{status:'ARMED',evaluated:date},notify:false,escalation:false};
   const next={...old,evaluated:date};
   if(value<r.threshold-r.buffer)return {state:{status:'ARMED',evaluated:date},notify:false,escalation:false};
   const escalation=old.status==='TRIGGERED';
@@ -148,7 +157,15 @@ export function evaluate(w: Workspace,force=false): Workspace {
       for(const a of actions){const id=`corporate:${p.id}:${a.date}`;if(!w.alerts.some(x=>x.id===id))addAlert(w,{id,code:p.code,ruleId:'corporate',date:a.date,title:'分红除权校准提醒：请确认份额与成本',value:0,threshold:0,label:a.dividend,escalation:false,read:false});}
     }
     if(!p.needsCalibration && t.nav>p.hwm){p.hwm=t.nav;p.hwmDate=t.date;}
-    for(const r of effectiveRules(w,p.code)){
+    const rules=effectiveRules(w,p.code);
+    for(const r of rules){
+      // An explicit stop-loss rule on the fund takes over from the trailing rule's built-in floor.
+      const stop=stopLossOf(r);
+      if(stop>0 && p.holding && !p.needsCalibration && p.cost>0 && !rules.some(x=>x.type==='FIXED_STOP_LOSS')){
+        const {step,buffer}=RULE_DEFAULTS.FIXED_STOP_LOSS,loss=-positionMetrics(p,f).ret;
+        const key=`${r.id}:stop:${p.id}`,next=transition(w.states[key],{...r,threshold:stop,step,buffer:Math.min(buffer,stop/2)},loss,t.date);w.states[key]=next.state;
+        if(next.notify)addAlert(w,{id:`${key}:${t.date}`,code:p.code,ruleId:r.id,date:t.date,title:STOP_LOSS_TITLE,value:loss,threshold:stop,label:r.label,escalation:next.escalation,read:false});
+      }
       const value=ruleValue(r,p,f);if(value===null)continue;
       const key=`${r.id}:${p.id}`,next=transition(w.states[key],r,value,t.date);w.states[key]=next.state;
       if(next.notify)addAlert(w,{id:`${key}:${t.date}`,code:p.code,ruleId:r.id,date:t.date,title:RULE_NAMES[r.type],value,threshold:r.threshold,label:r.label,escalation:next.escalation,read:false});

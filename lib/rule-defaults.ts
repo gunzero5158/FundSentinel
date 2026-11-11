@@ -10,5 +10,5 @@ export const RULE_DEFAULTS:Record<RuleType,{threshold:number;activation:number;s
  FUND_STAGE_DD:{threshold:10,activation:0,step:2,buffer:1},
  FUND_HIST_MDD:{threshold:90,activation:0,step:10,buffer:5},
  FUND_DAILY_VOL:{threshold:3,activation:0,step:1,buffer:0.5},
- FUND_DOWN_DAYS:{threshold:3,activation:0,step:1,buffer:0}
+ FUND_DOWN_DAYS:{threshold:5,activation:0,step:1,buffer:0}
 };
